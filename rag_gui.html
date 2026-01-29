@@ -1,0 +1,941 @@
+<!DOCTYPE html>
+<html lang="tr">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mini RAG System</title>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@400;600;700&family=JetBrains+Mono:wght@400;500&family=Space+Mono:wght@700&display=swap"
+        rel="stylesheet">
+    <style>
+        :root {
+            --ink: #1a1614;
+            --paper: #faf8f4;
+            --accent: #e63946;
+            --accent-light: #ff6b7a;
+            --sage: #6b8e70;
+            --sand: #d4c5b0;
+            --shadow: rgba(26, 22, 20, 0.08);
+            --glow: rgba(230, 57, 70, 0.12);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Crimson Pro', serif;
+            background: var(--paper);
+            color: var(--ink);
+            min-height: 100vh;
+            overflow-x: hidden;
+            position: relative;
+        }
+
+        /* Decorative background elements */
+        body::before {
+            content: '';
+            position: fixed;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background:
+                radial-gradient(circle at 20% 80%, var(--glow) 0%, transparent 50%),
+                radial-gradient(circle at 80% 20%, rgba(107, 142, 112, 0.06) 0%, transparent 50%);
+            animation: drift 60s ease-in-out infinite;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        @keyframes drift {
+
+            0%,
+            100% {
+                transform: translate(0, 0) rotate(0deg);
+            }
+
+            33% {
+                transform: translate(5%, 5%) rotate(1deg);
+            }
+
+            66% {
+                transform: translate(-3%, 3%) rotate(-1deg);
+            }
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 3rem 2rem;
+            position: relative;
+            z-index: 1;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 4rem;
+            animation: fadeInDown 0.8s ease-out;
+        }
+
+        h1 {
+            font-family: 'Space Mono', monospace;
+            font-size: 3.5rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(135deg, var(--ink) 0%, var(--accent) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            text-transform: uppercase;
+        }
+
+        .subtitle {
+            font-size: 1.3rem;
+            color: var(--sage);
+            font-style: italic;
+            letter-spacing: 0.03em;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 2rem;
+            border-bottom: 2px solid var(--sand);
+            animation: fadeIn 1s ease-out 0.2s both;
+        }
+
+        .tab {
+            font-family: 'JetBrains Mono', monospace;
+            padding: 1rem 2rem;
+            background: none;
+            border: none;
+            font-size: 0.95rem;
+            font-weight: 500;
+            color: var(--ink);
+            cursor: pointer;
+            position: relative;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .tab::after {
+            content: '';
+            position: absolute;
+            bottom: -2px;
+            left: 0;
+            width: 0;
+            height: 2px;
+            background: var(--accent);
+            transition: width 0.3s ease;
+        }
+
+        .tab:hover {
+            color: var(--accent);
+        }
+
+        .tab.active {
+            color: var(--accent);
+        }
+
+        .tab.active::after {
+            width: 100%;
+        }
+
+        .tab-content {
+            display: none;
+            animation: fadeInUp 0.6s ease-out;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .card {
+            background: white;
+            border-radius: 16px;
+            padding: 2.5rem;
+            margin-bottom: 2rem;
+            box-shadow:
+                0 4px 6px var(--shadow),
+                0 0 0 1px rgba(0, 0, 0, 0.04);
+            transition: all 0.3s ease;
+        }
+
+        .card:hover {
+            box-shadow:
+                0 8px 16px var(--shadow),
+                0 0 0 1px rgba(230, 57, 70, 0.1);
+            transform: translateY(-2px);
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            font-size: 1.1rem;
+            color: var(--ink);
+        }
+
+        input[type="text"],
+        input[type="number"],
+        textarea,
+        select {
+            width: 100%;
+            padding: 1rem 1.25rem;
+            border: 2px solid var(--sand);
+            border-radius: 12px;
+            font-family: 'Crimson Pro', serif;
+            font-size: 1rem;
+            background: var(--paper);
+            transition: all 0.3s ease;
+        }
+
+        input:focus,
+        textarea:focus,
+        select:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 4px var(--glow);
+        }
+
+        textarea {
+            min-height: 120px;
+            resize: vertical;
+        }
+
+        button {
+            font-family: 'JetBrains Mono', monospace;
+            padding: 1rem 2.5rem;
+            background: var(--accent);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            box-shadow: 0 4px 12px rgba(230, 57, 70, 0.3);
+        }
+
+        button:hover:not(:disabled) {
+            background: var(--accent-light);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(230, 57, 70, 0.4);
+        }
+
+        button:active:not(:disabled) {
+            transform: translateY(0);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        button.secondary {
+            background: var(--sage);
+            box-shadow: 0 4px 12px rgba(107, 142, 112, 0.3);
+        }
+
+        button.secondary:hover:not(:disabled) {
+            background: #7ba382;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 2rem;
+            font-style: italic;
+            color: var(--sage);
+        }
+
+        .loading.active {
+            display: block;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 40px;
+            height: 40px;
+            border: 4px solid var(--sand);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 1rem;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .results {
+            margin-top: 2rem;
+        }
+
+        .result-item {
+            background: var(--paper);
+            border-left: 4px solid var(--accent);
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            border-radius: 8px;
+            animation: slideIn 0.4s ease-out;
+            animation-fill-mode: both;
+        }
+
+        .result-item:nth-child(1) {
+            animation-delay: 0.05s;
+        }
+
+        .result-item:nth-child(2) {
+            animation-delay: 0.1s;
+        }
+
+        .result-item:nth-child(3) {
+            animation-delay: 0.15s;
+        }
+
+        .result-item:nth-child(4) {
+            animation-delay: 0.2s;
+        }
+
+        .result-item:nth-child(5) {
+            animation-delay: 0.25s;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateX(-20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        .result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .result-rank {
+            font-family: 'Space Mono', monospace;
+            font-weight: 700;
+            color: var(--accent);
+            font-size: 1.5rem;
+        }
+
+        .result-similarity {
+            font-family: 'JetBrains Mono', monospace;
+            background: var(--sage);
+            color: white;
+            padding: 0.25rem 0.75rem;
+            border-radius: 6px;
+            font-size: 0.85rem;
+        }
+
+        .result-source {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+            color: var(--sage);
+            margin-bottom: 0.5rem;
+        }
+
+        .result-text {
+            line-height: 1.7;
+            font-size: 1.05rem;
+        }
+
+        .answer-box {
+            background: linear-gradient(135deg, #fef9f3 0%, white 100%);
+            border: 2px solid var(--accent);
+            border-radius: 16px;
+            padding: 2rem;
+            margin-top: 2rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .answer-box::before {
+            content: '"';
+            position: absolute;
+            top: -20px;
+            left: 20px;
+            font-size: 120px;
+            color: var(--sand);
+            font-family: Georgia, serif;
+            opacity: 0.3;
+        }
+
+        .answer-box h3 {
+            font-family: 'Space Mono', monospace;
+            color: var(--accent);
+            margin-bottom: 1rem;
+            font-size: 1.2rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .answer-text {
+            line-height: 1.8;
+            font-size: 1.15rem;
+            position: relative;
+            z-index: 1;
+        }
+
+        .mode-badge {
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            font-weight: 500;
+            margin-bottom: 1rem;
+        }
+
+        .mode-rag {
+            background: rgba(107, 142, 112, 0.15);
+            color: var(--sage);
+        }
+
+        .mode-fallback {
+            background: rgba(230, 57, 70, 0.15);
+            color: var(--accent);
+        }
+
+        .timing-info {
+            display: flex;
+            gap: 2rem;
+            margin-top: 1.5rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid var(--sand);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+            color: var(--sage);
+        }
+
+        .config-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .status-message {
+            padding: 1rem 1.5rem;
+            border-radius: 12px;
+            margin-top: 1rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.95rem;
+            animation: fadeIn 0.3s ease-out;
+        }
+
+        .status-success {
+            background: rgba(107, 142, 112, 0.15);
+            color: var(--sage);
+            border: 2px solid var(--sage);
+        }
+
+        .status-error {
+            background: rgba(230, 57, 70, 0.15);
+            color: var(--accent);
+            border: 2px solid var(--accent);
+        }
+
+        .file-upload {
+            border: 2px dashed var(--sand);
+            border-radius: 12px;
+            padding: 2rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .file-upload:hover {
+            border-color: var(--accent);
+            background: var(--glow);
+        }
+
+        .file-upload.dragover {
+            border-color: var(--accent);
+            background: var(--glow);
+            transform: scale(1.02);
+        }
+
+        @keyframes fadeInDown {
+            from {
+                opacity: 0;
+                transform: translateY(-30px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+            }
+
+            to {
+                opacity: 1;
+            }
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 2.5rem;
+            }
+
+            .tabs {
+                overflow-x: auto;
+            }
+
+            .tab {
+                padding: 0.75rem 1.5rem;
+            }
+
+            .config-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .timing-info {
+                flex-direction: column;
+                gap: 0.5rem;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>Mini RAG</h1>
+            <p class="subtitle">Retrieval Augmented Generation System</p>
+        </header>
+
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('ask')">Ask Question</button>
+            <button class="tab" onclick="switchTab('search')">Search Only</button>
+            <button class="tab" onclick="switchTab('ingest')">Ingest Documents</button>
+            <button class="tab" onclick="switchTab('config')">Configuration</button>
+            <button class="tab" onclick="switchTab('info')">Index Info</button>
+        </div>
+
+        <!-- Ask Tab -->
+        <div id="ask-tab" class="tab-content active">
+            <div class="card">
+                <h2>Ask a Question</h2>
+                <form id="ask-form" onsubmit="handleAsk(event)">
+                    <div class="form-group">
+                        <label for="question">Your Question</label>
+                        <textarea id="question" placeholder="iade politikası nedir?" required></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="ask-topk">Number of Context Chunks</label>
+                        <input type="number" id="ask-topk" value="5" min="1" max="20">
+                    </div>
+                    <button type="submit">Get Answer</button>
+                </form>
+
+                <div id="ask-loading" class="loading">
+                    <div class="spinner"></div>
+                    <p>Processing your question...</p>
+                </div>
+
+                <div id="ask-results"></div>
+            </div>
+        </div>
+
+        <!-- Search Tab -->
+        <div id="search-tab" class="tab-content">
+            <div class="card">
+                <h2>Search Documents</h2>
+                <form id="search-form" onsubmit="handleSearch(event)">
+                    <div class="form-group">
+                        <label for="search-query">Search Query</label>
+                        <input type="text" id="search-query" placeholder="Enter search terms..." required>
+                    </div>
+                    <div class="form-group">
+                        <label for="search-topk">Number of Results</label>
+                        <input type="number" id="search-topk" value="5" min="1" max="20">
+                    </div>
+                    <button type="submit">Search</button>
+                </form>
+
+                <div id="search-loading" class="loading">
+                    <div class="spinner"></div>
+                    <p>Searching...</p>
+                </div>
+
+                <div id="search-results"></div>
+            </div>
+        </div>
+
+        <!-- Ingest Tab -->
+        <div id="ingest-tab" class="tab-content">
+            <div class="card">
+                <h2>Ingest Documents</h2>
+                <form id="ingest-form" onsubmit="handleIngest(event)">
+                    <div class="form-group">
+                        <label for="folder-path">Folder Path</label>
+                        <input type="text" id="folder-path" placeholder="./data" required>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="force-rebuild"> Force Rebuild Index
+                        </label>
+                    </div>
+                    <button type="submit">Start Ingestion</button>
+                </form>
+
+                <div id="ingest-loading" class="loading">
+                    <div class="spinner"></div>
+                    <p>Processing documents...</p>
+                </div>
+
+                <div id="ingest-results"></div>
+            </div>
+        </div>
+
+        <!-- Config Tab -->
+        <div id="config-tab" class="tab-content">
+            <div class="card">
+                <h2>System Configuration</h2>
+                <div class="config-grid">
+                    <div class="form-group">
+                        <label for="embed-model">Embedding Model</label>
+                        <input type="text" id="embed-model" value="all-MiniLM-L6-v2">
+                    </div>
+                    <div class="form-group">
+                        <label for="chunk-size">Chunk Size</label>
+                        <input type="number" id="chunk-size" value="512">
+                    </div>
+                    <div class="form-group">
+                        <label for="chunk-overlap">Chunk Overlap</label>
+                        <input type="number" id="chunk-overlap" value="128">
+                    </div>
+                    <div class="form-group">
+                        <label for="llama-cpp-url">llama.cpp URL</label>
+                        <input type="text" id="llama-cpp-url" value="http://yapayzeka.pve.izu.edu.tr">
+                    </div>
+                    <div class="form-group">
+                        <label for="llama-cpp-model">LLM Model</label>
+                        <input type="text" id="llama-cpp-model" value="auto" placeholder="auto = detect from server">
+                    </div>
+                    <div class="form-group">
+                        <label for="qdrant-url">Qdrant URL</label>
+                        <input type="text" id="qdrant-url" value="http://172.18.2.251:30986/">
+                    </div>
+                    <div class="form-group">
+                        <label for="similarity-threshold">Similarity Threshold</label>
+                        <input type="number" id="similarity-threshold" value="0.25" step="0.01" min="0" max="1">
+                    </div>
+                </div>
+                <button onclick="saveConfig()">Save Configuration</button>
+                <div id="config-status"></div>
+            </div>
+        </div>
+
+        <!-- Info Tab -->
+        <div id="info-tab" class="tab-content">
+            <div class="card">
+                <h2>Index Information</h2>
+                <button onclick="loadIndexInfo()">Refresh Info</button>
+
+                <div id="info-loading" class="loading">
+                    <div class="spinner"></div>
+                    <p>Loading index information...</p>
+                </div>
+
+                <div id="info-results"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Tab switching
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+
+            event.target.classList.add('active');
+            document.getElementById(`${tabName}-tab`).classList.add('active');
+        }
+
+        // API calls
+        async function callAPI(endpoint, data = null) {
+            const response = await fetch(`/api/${endpoint}`, {
+                method: data ? 'POST' : 'GET',
+                headers: data ? { 'Content-Type': 'application/json' } : {},
+                body: data ? JSON.stringify(data) : null
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || error.detail || error.message || 'API Error');
+            }
+
+            return response.json();
+        }
+
+        // Ask handler
+        async function handleAsk(event) {
+            event.preventDefault();
+
+            const question = document.getElementById('question').value;
+            const topk = parseInt(document.getElementById('ask-topk').value);
+
+            document.getElementById('ask-loading').classList.add('active');
+            document.getElementById('ask-results').innerHTML = '';
+
+            try {
+                const result = await callAPI('ask', { question, top_k: topk });
+                displayAskResults(result);
+            } catch (error) {
+                document.getElementById('ask-results').innerHTML = `
+                    <div class="status-message status-error">
+                        Error: ${error.message}
+                    </div>
+                `;
+            } finally {
+                document.getElementById('ask-loading').classList.remove('active');
+            }
+        }
+
+        function displayAskResults(result) {
+            const container = document.getElementById('ask-results');
+
+            let html = `
+                <div class="answer-box">
+                    <div class="mode-badge mode-${result.mode.toLowerCase()}">${result.mode}</div>
+                    <h3>Answer</h3>
+                    <div class="answer-text">${result.answer}</div>
+                    <div class="timing-info">
+                        <span>Search: ${result.timing.search.toFixed(3)}s</span>
+                        <span>LLM: ${result.timing.llm.toFixed(3)}s</span>
+                        <span>Total: ${result.timing.total.toFixed(3)}s</span>
+                    </div>
+                </div>
+            `;
+
+            if (result.results && result.results.length > 0) {
+                html += '<div class="results"><h3>Sources</h3>';
+                result.results.forEach(r => {
+                    html += `
+                        <div class="result-item">
+                            <div class="result-header">
+                                <span class="result-rank">#${r.rank}</span>
+                                <span class="result-similarity">${(r.similarity * 100).toFixed(1)}%</span>
+                            </div>
+                            <div class="result-source">${r.doc_id}</div>
+                            <div class="result-source">${r.source}</div>
+                        </div>
+                    `;
+                });
+                html += '</div>';
+            }
+
+            container.innerHTML = html;
+        }
+
+        // Search handler
+        async function handleSearch(event) {
+            event.preventDefault();
+
+            const query = document.getElementById('search-query').value;
+            const topk = parseInt(document.getElementById('search-topk').value);
+
+            document.getElementById('search-loading').classList.add('active');
+            document.getElementById('search-results').innerHTML = '';
+
+            try {
+                const result = await callAPI('search', { query, top_k: topk });
+                displaySearchResults(result);
+            } catch (error) {
+                document.getElementById('search-results').innerHTML = `
+                    <div class="status-message status-error">
+                        Error: ${error.message}
+                    </div>
+                `;
+            } finally {
+                document.getElementById('search-loading').classList.remove('active');
+            }
+        }
+
+        function displaySearchResults(result) {
+            const container = document.getElementById('search-results');
+
+            if (!result.results || result.results.length === 0) {
+                container.innerHTML = `
+                    <div class="status-message status-error">
+                        No results found
+                    </div>
+                `;
+                return;
+            }
+
+            let html = '<div class="results">';
+            result.results.forEach(r => {
+                html += `
+                    <div class="result-item">
+                        <div class="result-header">
+                            <span class="result-rank">#${r.rank}</span>
+                            <span class="result-similarity">${(r.similarity * 100).toFixed(1)}%</span>
+                        </div>
+                        <div class="result-source">${r.doc_id}</div>
+                        <div class="result-source">${r.source}</div>
+                        <div class="result-text">${r.text.substring(0, 300)}...</div>
+                    </div>
+                `;
+            });
+            html += '</div>';
+
+            container.innerHTML = html;
+        }
+
+        // Ingest handler
+        async function handleIngest(event) {
+            event.preventDefault();
+
+            const folderPath = document.getElementById('folder-path').value;
+            const forceRebuild = document.getElementById('force-rebuild').checked;
+
+            document.getElementById('ingest-loading').classList.add('active');
+            document.getElementById('ingest-results').innerHTML = '';
+
+            try {
+                const result = await callAPI('ingest', { folder: folderPath, force: forceRebuild });
+                document.getElementById('ingest-results').innerHTML = `
+                    <div class="status-message status-success">
+                        Successfully indexed ${result.total_chunks} chunks from ${result.total_files} files in ${result.elapsed_time.toFixed(2)}s
+                    </div>
+                `;
+            } catch (error) {
+                document.getElementById('ingest-results').innerHTML = `
+                    <div class="status-message status-error">
+                        Error: ${error.message}
+                    </div>
+                `;
+            } finally {
+                document.getElementById('ingest-loading').classList.remove('active');
+            }
+        }
+
+        // Config handler
+        function saveConfig() {
+            const config = {
+                embed_model: document.getElementById('embed-model').value,
+                chunk_size: parseInt(document.getElementById('chunk-size').value),
+                chunk_overlap: parseInt(document.getElementById('chunk-overlap').value),
+                ollama_model: document.getElementById('ollama-model').value,
+                ollama_url: document.getElementById('ollama-url').value,
+                similarity_threshold: parseFloat(document.getElementById('similarity-threshold').value)
+            };
+
+            localStorage.setItem('rag-config', JSON.stringify(config));
+
+            document.getElementById('config-status').innerHTML = `
+                <div class="status-message status-success">
+                    Configuration saved successfully!
+                </div>
+            `;
+
+            setTimeout(() => {
+                document.getElementById('config-status').innerHTML = '';
+            }, 3000);
+        }
+
+        // Load config on startup
+        function loadConfig() {
+            const saved = localStorage.getItem('rag-config');
+            if (saved) {
+                const config = JSON.parse(saved);
+                if (config.embed_model) document.getElementById('embed-model').value = config.embed_model;
+                if (config.chunk_size) document.getElementById('chunk-size').value = config.chunk_size;
+                if (config.chunk_overlap) document.getElementById('chunk-overlap').value = config.chunk_overlap;
+                if (config.ollama_model) document.getElementById('ollama-model').value = config.ollama_model;
+                if (config.ollama_url) document.getElementById('ollama-url').value = config.ollama_url;
+                if (config.similarity_threshold) document.getElementById('similarity-threshold').value = config.similarity_threshold;
+            }
+        }
+
+        // Index info loader
+        async function loadIndexInfo() {
+            document.getElementById('info-loading').classList.add('active');
+            document.getElementById('info-results').innerHTML = '';
+
+            try {
+                const result = await callAPI('info');
+                displayIndexInfo(result);
+            } catch (error) {
+                document.getElementById('info-results').innerHTML = `
+                    <div class="status-message status-error">
+                        Error: ${error.message}
+                    </div>
+                `;
+            } finally {
+                document.getElementById('info-loading').classList.remove('active');
+            }
+        }
+
+        function displayIndexInfo(info) {
+            const container = document.getElementById('info-results');
+
+            container.innerHTML = `
+                <div class="results" style="margin-top: 2rem;">
+                    <div class="result-item">
+                        <h3>Index Statistics</h3>
+                        <p><strong>Total Chunks:</strong> ${info.total_chunks}</p>
+                        <p><strong>Unique Sources:</strong> ${info.unique_sources}</p>
+                        <p><strong>Total Characters:</strong> ${info.total_characters.toLocaleString()}</p>
+                        <p><strong>Average Chunk Size:</strong> ${info.avg_chunk_size.toFixed(0)} chars</p>
+                    </div>
+                    <div class="result-item">
+                        <h3>Configuration</h3>
+                        <p><strong>Embed Model:</strong> ${info.config.embed_model}</p>
+                        <p><strong>Chunk Size:</strong> ${info.config.chunk_size}</p>
+                        <p><strong>Vector Dimension:</strong> ${info.config.dimension}</p>
+                        <p><strong>Device:</strong> ${info.config.device}</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Initialize
+        loadConfig();
+    </script>
+</body>
+
+</html>
