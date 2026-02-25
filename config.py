@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 DEFAULTS = {
     # Qdrant
     "QDRANT_URL": "http://172.18.2.251:30986",
-    "QDRANT_COLLECTION": "ders_secim_docs",
+    "QDRANT_COLLECTION": "ders_docs_v2",
     "QDRANT_CONFIG_COLLECTION": "_system_config",
     "QDRANT_CACHE_COLLECTION": "_embedding_cache",
 
