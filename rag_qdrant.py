@@ -712,7 +712,14 @@ async def answer_query_async(
             return {
                 'error': 'LLM server not available',
                 'query': query,
-                'mode': 'ERROR'
+                'answer': 'LLM sunucusuna bağlanılamıyor. Lütfen sunucunun çalıştığından emin olun.',
+                'mode': 'ERROR',
+                'results': [],
+                'timing': {
+                    'search': search_time,
+                    'llm': 0,
+                    'total': search_time,
+                },
             }
 
         answer = await client.chat(system_prompt, user_prompt)
