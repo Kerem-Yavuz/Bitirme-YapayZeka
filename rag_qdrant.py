@@ -378,7 +378,7 @@ class VectorIndex:
         self.model = SentenceTransformer(config.EMBED_MODEL, device=self.device)
         self.dimension = self.model.get_sentence_embedding_dimension()
 
-        self.client = QdrantClient(url=config.QDRANT_URL)
+        self.client = QdrantClient(url=config.QDRANT_URL, timeout=120)
         self.collection_name = config.QDRANT_COLLECTION
         self.cache = QdrantEmbeddingCache(self.client, self.dimension)
         self.chunks: List[DocChunk] = []
@@ -436,7 +436,10 @@ class VectorIndex:
         )
 
         # Store embeddings in cache
-        self.cache.set_batch(texts, embeddings)
+        try:
+            self.cache.set_batch(texts, embeddings)
+        except Exception as e:
+            logger.warning(f"Cache write failed (non-fatal): {e}")
 
         # Upload to Qdrant
         points = []
@@ -454,17 +457,33 @@ class VectorIndex:
                 }
             ))
 
-        # Batch upsert in chunks of 100
-        for i in range(0, len(points), 100):
-            self.client.upsert(
-                collection_name=self.collection_name,
-                points=points[i:i + 100],
-            )
+        # Batch upsert in small chunks with retry
+        batch_size = 20
+        for i in range(0, len(points), batch_size):
+            batch = points[i:i + batch_size]
+            for attempt in range(3):
+                try:
+                    self.client.upsert(
+                        collection_name=self.collection_name,
+                        points=batch,
+                    )
+                    break
+                except Exception as e:
+                    if attempt < 2:
+                        wait = (attempt + 1) * 5
+                        logger.warning(f"Upsert batch {i//batch_size} failed (attempt {attempt+1}/3), retrying in {wait}s: {e}")
+                        import time as _time
+                        _time.sleep(wait)
+                    else:
+                        raise RuntimeError(f"Upsert failed after 3 attempts: {e}")
 
         logger.info(f"{len(points)} chunks uploaded to Qdrant.")
 
         # Save config snapshot to Qdrant
-        save_config_to_qdrant(self.client)
+        try:
+            save_config_to_qdrant(self.client)
+        except Exception as e:
+            logger.warning(f"Config save failed (non-fatal): {e}")
 
     def search(self, query: str, top_k: int = config.TOP_K) -> List[SearchResult]:
         """Vector search in Qdrant."""
