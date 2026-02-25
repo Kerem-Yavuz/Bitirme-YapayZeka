@@ -737,15 +737,23 @@
         function displayAskResults(result) {
             const container = document.getElementById('ask-results');
 
+            // Handle both router format (route/timing.route/timing.rag) and RAG format (mode/timing.search)
+            const mode = result.route || result.mode || 'unknown';
+            const searchTime = (result.timing && (result.timing.search || result.timing.rag || result.timing.route)) || 0;
+            const llmTime = (result.timing && result.timing.llm) || 0;
+            const totalTime = (result.timing && result.timing.total) || 0;
+
+            const modeClass = mode === 'rejected' ? 'mode-fallback' : 'mode-rag';
+
             let html = `
                 <div class="answer-box">
-                    <div class="mode-badge mode-${result.mode.toLowerCase()}">${result.mode}</div>
+                    <div class="mode-badge ${modeClass}">${mode.toUpperCase()}</div>
                     <h3>Answer</h3>
                     <div class="answer-text">${result.answer}</div>
                     <div class="timing-info">
-                        <span>Search: ${result.timing.search.toFixed(3)}s</span>
-                        <span>LLM: ${result.timing.llm.toFixed(3)}s</span>
-                        <span>Total: ${result.timing.total.toFixed(3)}s</span>
+                        <span>Search: ${searchTime.toFixed(3)}s</span>
+                        <span>LLM: ${llmTime.toFixed(3)}s</span>
+                        <span>Total: ${totalTime.toFixed(3)}s</span>
                     </div>
                 </div>
             `;
