@@ -117,7 +117,12 @@ class QdrantEmbeddingCache:
         self.dimension = dimension
         self.hits = 0
         self.misses = 0
-        self._ensure_collection()
+        self._available = False
+        try:
+            self._ensure_collection()
+            self._available = True
+        except Exception as e:
+            logger.warning(f"Embedding cache unavailable (non-fatal): {e}")
 
     def _ensure_collection(self):
         """Create cache collection if it doesn't exist."""
@@ -144,6 +149,9 @@ class QdrantEmbeddingCache:
 
     def get(self, text: str) -> Optional[np.ndarray]:
         """Retrieve cached embedding for text."""
+        if not self._available:
+            self.misses += 1
+            return None
         point_id = self._text_to_id(text)
         try:
             points = self.client.retrieve(
@@ -161,6 +169,8 @@ class QdrantEmbeddingCache:
 
     def set(self, text: str, vector: np.ndarray):
         """Store embedding in cache."""
+        if not self._available:
+            return
         point_id = self._text_to_id(text)
         try:
             self.client.upsert(
@@ -180,6 +190,8 @@ class QdrantEmbeddingCache:
 
     def set_batch(self, texts: List[str], vectors: np.ndarray):
         """Store multiple embeddings in cache at once."""
+        if not self._available:
+            return
         points = []
         for text, vec in zip(texts, vectors):
             point_id = self._text_to_id(text)
