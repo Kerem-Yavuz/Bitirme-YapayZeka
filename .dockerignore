@@ -1,0 +1,15 @@
+# Ders Seçim Chatbot — .dockerignore
+__pycache__/
+*.pyc
+*.pyo
+.git/
+.env
+.env.local
+mini_index_optimized/
+*.pkl
+*.faiss
+*.npy
+.vscode/
+.idea/
+*.md
+!rag_gui.html

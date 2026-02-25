@@ -1,0 +1,32 @@
+# Ders Seçim Chatbot — Dependencies
+# Core
+flask>=3.0
+flask-cors>=4.0
+gunicorn>=21.2
+
+# RAG / Embeddings
+sentence-transformers>=2.2
+torch>=2.0
+numpy>=1.24
+
+# Vector Database
+qdrant-client>=1.7
+
+# LLM Client
+aiohttp>=3.9
+
+# Document Processing
+pypdf>=3.0
+tqdm>=4.65
+
+# NLP
+nltk>=3.8
+
+# Semantic Router
+semantic-router>=0.0.20
+
+# Configuration
+python-dotenv>=1.0
+
+# Optional: faster compression
+lz4>=4.3

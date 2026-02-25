@@ -1,0 +1,28 @@
+# Ders Seçim Chatbot — Docker Compose
+# Qdrant runs on external server (172.18.2.251:30986)
+
+version: "3.9"
+
+services:
+  app:
+    build: .
+    container_name: ders-secim-chatbot
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
+    environment:
+      - QDRANT_URL=${QDRANT_URL:-http://172.18.2.251:30986}
+      - LLAMA_CPP_URL=${LLAMA_CPP_URL:-http://yapayzeka.pve.izu.edu.tr}
+      - EASY_LLM_URL=${EASY_LLM_URL:-http://yapayzeka.pve.izu.edu.tr}
+      - HARD_LLM_URL=${HARD_LLM_URL:-http://yapayzeka.pve.izu.edu.tr}
+      - EMBED_DEVICE=${EMBED_DEVICE:-cpu}
+    volumes:
+      - ./data:/app/data:ro    # Mount data folder for ingest (read-only)
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s       # Model loading can take time
