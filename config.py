@@ -139,6 +139,7 @@ def save_config_to_qdrant(client=None):
             collection_name=collection,
             vectors_config=models.VectorParams(size=1, distance=models.Distance.COSINE),
             shard_number=1,
+            replication_factor=2,
         )
 
     payload = {

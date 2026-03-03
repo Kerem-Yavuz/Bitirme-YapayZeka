@@ -136,6 +136,7 @@ class QdrantEmbeddingCache:
                         distance=models.Distance.COSINE,
                     ),
                     shard_number=1,
+                    replication_factor=2,
                 )
                 logger.info(f"Created cache collection: {self.collection}")
         except Exception as e:
@@ -407,6 +408,7 @@ class VectorIndex:
                     distance=models.Distance.COSINE,
                 ),
                 shard_number=1,
+                replication_factor=2,
             )
             logger.info(f"Created collection: {self.collection_name}")
 
