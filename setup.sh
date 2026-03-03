@@ -24,16 +24,6 @@ else
     exit 1
 fi
 
-# Check Docker
-echo -n "Checking Docker... "
-if command -v docker &> /dev/null; then
-    echo -e "${GREEN}✓${NC} Docker installed"
-else
-    echo -e "${RED}✗${NC} Docker not found!"
-    echo "Please install Docker: https://docs.docker.com/get-docker/"
-    exit 1
-fi
-
 # Check if Qdrant is running
 QDRANT_URL="${QDRANT_URL:-http://172.18.2.251:30986}"
 echo -n "Checking Qdrant at $QDRANT_URL... "
