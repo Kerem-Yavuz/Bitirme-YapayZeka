@@ -41,6 +41,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
 from config import config, save_config_to_qdrant
+from tool_calling import answer_with_tools
 
 # Optional NLTK
 try:
@@ -698,13 +699,38 @@ async def answer_query_async(
     if use_rag:
         context = build_context(results)
         system_prompt = SYSTEM_PROMPT_RAG
-        user_prompt = f"Soru: {query}\n\nBAĞLAM:\n{context}\n\nCevap:"
     else:
+        context = "(boş)"
         system_prompt = SYSTEM_PROMPT_FALLBACK
-        user_prompt = f"Soru: {query}\n\nBAĞLAM:\n(boş)\n\nCevap:"
+
+    # Tool calling — check if quota data is needed
+    base_url = llm_url or config.LLAMA_CPP_URL
+    tool_info = {"tool_used": None, "tool_result": None}
+    tool_time = 0
+
+    try:
+        tool_start = time.time()
+        tool_result = await answer_with_tools(
+            query=query,
+            context=context,
+            llm_url=base_url,
+            system_prompt=system_prompt,
+        )
+        context = tool_result["enriched_context"]
+        tool_info = {
+            "tool_used": tool_result["tool_used"],
+            "tool_result": tool_result["tool_result"],
+        }
+        tool_time = time.time() - tool_start
+
+        if verbose and tool_info["tool_used"]:
+            logger.info(f"Tool '{tool_info['tool_used']}' executed in {tool_time:.3f}s")
+    except Exception as e:
+        logger.warning(f"Tool calling failed (non-fatal): {e}")
+
+    user_prompt = f"Soru: {query}\n\nBAĞLAM:\n{context}\n\nCevap:"
 
     # Get answer from LLM
-    base_url = llm_url or config.LLAMA_CPP_URL
     llm_start = time.time()
 
     async with AsyncLlamaCppClient(base_url=base_url) as client:
@@ -719,6 +745,7 @@ async def answer_query_async(
                 'results': [],
                 'timing': {
                     'search': search_time,
+                    'tool': 0,
                     'llm': 0,
                     'total': search_time,
                 },
@@ -735,6 +762,7 @@ async def answer_query_async(
         'query': query,
         'answer': answer,
         'mode': 'RAG' if use_rag else 'FALLBACK',
+        'tool': tool_info,
         'results': [
             {
                 'doc_id': r.chunk.doc_id,
@@ -746,8 +774,9 @@ async def answer_query_async(
         ] if use_rag else [],
         'timing': {
             'search': search_time,
+            'tool': tool_time,
             'llm': llm_time,
-            'total': search_time + llm_time
+            'total': search_time + tool_time + llm_time
         },
         'best_similarity': results[0].similarity if results else 0.0
     }

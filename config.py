@@ -65,6 +65,10 @@ DEFAULTS = {
 
     # File settings
     "SUPPORTED_EXTENSIONS": ".txt,.md,.pdf",
+
+    # Quota API (MariaDB backend)
+    "QUOTA_API_URL": "http://localhost:8080/api/quota",
+    "QUOTA_API_TIMEOUT": "10",
 }
 
 
@@ -115,6 +119,10 @@ class Config:
 
     # File settings
     SUPPORTED_EXTENSIONS: set = set(_get("SUPPORTED_EXTENSIONS").split(","))
+
+    # Quota API
+    QUOTA_API_URL: str = _get("QUOTA_API_URL")
+    QUOTA_API_TIMEOUT: int = int(_get("QUOTA_API_TIMEOUT"))
 
 
 config = Config()

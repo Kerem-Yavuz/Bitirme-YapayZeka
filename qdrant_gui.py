@@ -36,6 +36,13 @@ except ImportError:
     ROUTER_AVAILABLE = False
     logging.warning("Semantic router not available — falling back to direct LLM")
 
+try:
+    from tool_calling import check_quota
+    TOOL_CALLING_AVAILABLE = True
+except ImportError:
+    TOOL_CALLING_AVAILABLE = False
+    logging.warning("Tool calling not available")
+
 app = Flask(__name__)
 CORS(app)
 
@@ -280,6 +287,25 @@ def reset_qdrant():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/quota/<course_code>', methods=['GET'])
+def api_quota(course_code):
+    """
+    Check quota for a specific course.
+    Debug/testing endpoint for the quota tool.
+
+    GET /api/quota/BIL101
+    """
+    if not TOOL_CALLING_AVAILABLE:
+        return jsonify({'error': 'Tool calling module not available'}), 500
+
+    try:
+        result = asyncio.run(check_quota(course_code))
+        return jsonify(result)
+    except Exception as e:
+        app.logger.error(f"Error in quota endpoint: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 # ========================= MAIN =========================
 
 if __name__ == '__main__':
@@ -309,6 +335,7 @@ if __name__ == '__main__':
 ║    POST /api/ingest  — Ingest documents                  ║
 ║    GET  /api/info    — Collection info                   ║
 ║    GET  /api/health  — Health check                      ║
+║    GET  /api/quota/<code> — Check course quota           ║
 ║    POST /api/qdrant/reset — Reset all collections        ║
 ╚═══════════════════════════════════════════════════════════╝
     """)

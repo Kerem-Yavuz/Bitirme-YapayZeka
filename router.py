@@ -20,6 +20,7 @@ from semantic_router.encoders import HuggingFaceEncoder
 import aiohttp
 
 from config import config
+from tool_calling import answer_with_tools
 
 logging.basicConfig(
     level=logging.INFO,
@@ -284,16 +285,38 @@ async def route_and_answer(query: str, verbose: bool = True) -> Dict[str, Any]:
     else:
         llm_url = config.HARD_LLM_URL
 
-    # Step 5: Build prompts
-    system_prompt = (
-        "Sen bir üniversite ders seçim asistanısın. Verilen BAĞLAM'ı kullanarak "
-        "öğrencinin sorusunu yanıtla. Kaynaklarını belirt. "
-        "BAĞLAM yetersizse bunu söyle ve genel bilgini ekle. "
-        "Sadece ders seçimi ve akademik konularda yardımcı ol."
-    )
+    # Step 5: Tool calling — check if quota data is needed
+    tool_start = time.time()
+    tool_info = {"tool_used": None, "tool_result": None}
+    try:
+        system_prompt = (
+            "Sen bir üniversite ders seçim asistanısın. Verilen BAĞLAM'ı kullanarak "
+            "öğrencinin sorusunu yanıtla. Kaynaklarını belirt. "
+            "BAĞLAM yetersizse bunu söyle ve genel bilgini ekle. "
+            "Sadece ders seçimi ve akademik konularda yardımcı ol."
+        )
+        tool_result = await answer_with_tools(
+            query=query,
+            context=context,
+            llm_url=llm_url,
+            system_prompt=system_prompt,
+        )
+        context = tool_result["enriched_context"]
+        tool_info = {
+            "tool_used": tool_result["tool_used"],
+            "tool_result": tool_result["tool_result"],
+        }
+    except Exception as e:
+        logger.warning(f"Tool calling failed (non-fatal): {e}")
+    tool_time = time.time() - tool_start
+
+    if verbose and tool_info["tool_used"]:
+        logger.info(f"Tool '{tool_info['tool_used']}' executed in {tool_time:.3f}s")
+
+    # Step 6: Build final prompt with enriched context
     user_prompt = f"Soru: {query}\n\nBAĞLAM:\n{context}\n\nCevap:"
 
-    # Step 6: Call LLM
+    # Step 7: Call LLM
     llm_start = time.time()
     try:
         answer = await call_llm(llm_url, system_prompt, user_prompt)
@@ -311,9 +334,11 @@ async def route_and_answer(query: str, verbose: bool = True) -> Dict[str, Any]:
         "query": query,
         "answer": answer,
         "route": route_name,
+        "tool": tool_info,
         "timing": {
             "route": route_time,
             "rag": rag_time,
+            "tool": tool_time,
             "llm": llm_time,
             "total": total_time,
         },
