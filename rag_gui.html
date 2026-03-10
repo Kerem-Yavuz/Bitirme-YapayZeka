@@ -431,6 +431,138 @@
             color: var(--sage);
         }
 
+        /* Debug Panel */
+        .debug-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            margin-top: 1rem;
+            padding: 0.5rem 1.2rem;
+            background: rgba(26, 22, 20, 0.06);
+            border: 1px solid var(--sand);
+            border-radius: 8px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: var(--ink);
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            box-shadow: none;
+        }
+
+        .debug-toggle:hover {
+            background: rgba(26, 22, 20, 0.1);
+            border-color: var(--accent);
+            color: var(--accent);
+            transform: none;
+            box-shadow: none;
+        }
+
+        .debug-panel {
+            display: none;
+            margin-top: 1rem;
+            padding: 1.5rem;
+            background: linear-gradient(135deg, #1a1614 0%, #2a2420 100%);
+            border-radius: 12px;
+            border: 1px solid rgba(212, 197, 176, 0.15);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.82rem;
+            color: #e0dcd8;
+            animation: fadeIn 0.3s ease-out;
+        }
+
+        .debug-panel.open {
+            display: block;
+        }
+
+        .debug-section {
+            margin-bottom: 1rem;
+            padding-bottom: 0.8rem;
+            border-bottom: 1px solid rgba(212, 197, 176, 0.1);
+        }
+
+        .debug-section:last-child {
+            margin-bottom: 0;
+            padding-bottom: 0;
+            border-bottom: none;
+        }
+
+        .debug-section-title {
+            font-size: 0.75rem;
+            font-weight: 500;
+            color: var(--accent-light);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin-bottom: 0.5rem;
+        }
+
+        .debug-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.2rem 0;
+        }
+
+        .debug-label {
+            color: #a09890;
+        }
+
+        .debug-value {
+            color: #e0dcd8;
+            font-weight: 500;
+        }
+
+        .debug-value.highlight {
+            color: var(--accent-light);
+        }
+
+        .debug-value.success {
+            color: #6bdb73;
+        }
+
+        .debug-value.muted {
+            color: #706860;
+        }
+
+        .debug-timing-bar {
+            display: flex;
+            height: 8px;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 0.5rem;
+            margin-bottom: 0.3rem;
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .debug-timing-segment {
+            height: 100%;
+            min-width: 2px;
+            transition: width 0.5s ease;
+        }
+
+        .debug-timing-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.8rem;
+            margin-top: 0.3rem;
+        }
+
+        .debug-timing-legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.3rem;
+            font-size: 0.75rem;
+        }
+
+        .debug-timing-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
         .config-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
@@ -758,6 +890,112 @@
                     </div>
                 </div>
             `;
+
+            // Debug panel
+            if (result.debug) {
+                const d = result.debug;
+                const tc = d.tool_calling || {};
+                const t = d.timing || {};
+
+                // Route badge color
+                const routeColor = d.route === 'easy' ? '#6bdb73' : d.route === 'hard' ? '#ff6b7a' : '#706860';
+
+                // Timing bar segments
+                const totalMs = t.total_ms || 1;
+                const segments = [
+                    { label: 'Route', ms: t.route_ms || 0, color: '#6b8e70' },
+                    { label: 'RAG', ms: t.rag_ms || 0, color: '#d4c5b0' },
+                    { label: 'Tool', ms: t.tool_ms || 0, color: '#e6a23c' },
+                    { label: 'LLM', ms: t.llm_ms || 0, color: '#e63946' },
+                ];
+
+                let timingBarHtml = '<div class="debug-timing-bar">';
+                segments.forEach(s => {
+                    const pct = Math.max((s.ms / totalMs) * 100, 0.5);
+                    timingBarHtml += `<div class="debug-timing-segment" style="width:${pct}%;background:${s.color}"></div>`;
+                });
+                timingBarHtml += '</div>';
+
+                let timingLegendHtml = '<div class="debug-timing-legend">';
+                segments.forEach(s => {
+                    timingLegendHtml += `
+                        <div class="debug-timing-legend-item">
+                            <span class="debug-timing-dot" style="background:${s.color}"></span>
+                            <span class="debug-label">${s.label}:</span>
+                            <span class="debug-value">${s.ms.toFixed(1)}ms</span>
+                        </div>
+                    `;
+                });
+                timingLegendHtml += '</div>';
+
+                html += `
+                    <button class="debug-toggle" onclick="this.nextElementSibling.classList.toggle('open'); this.textContent = this.nextElementSibling.classList.contains('open') ? '🛠 Debug ▲' : '🛠 Debug ▼'">
+                        🛠 Debug ▼
+                    </button>
+                    <div class="debug-panel">
+                        <div class="debug-section">
+                            <div class="debug-section-title">🔀 Routing</div>
+                            <div class="debug-row">
+                                <span class="debug-label">Route</span>
+                                <span class="debug-value" style="color:${routeColor}">${(d.route || 'unknown').toUpperCase()}</span>
+                            </div>
+                        </div>
+
+                        <div class="debug-section">
+                            <div class="debug-section-title">🤖 LLM</div>
+                            <div class="debug-row">
+                                <span class="debug-label">Model</span>
+                                <span class="debug-value highlight">${d.llm_model || '—'}</span>
+                            </div>
+                            <div class="debug-row">
+                                <span class="debug-label">URL</span>
+                                <span class="debug-value muted">${d.llm_url || '—'}</span>
+                            </div>
+                        </div>
+
+                        <div class="debug-section">
+                            <div class="debug-section-title">🔧 Tool Calling</div>
+                            <div class="debug-row">
+                                <span class="debug-label">Triggered</span>
+                                <span class="debug-value ${tc.triggered ? 'success' : 'muted'}">${tc.triggered ? 'Evet ✅' : 'Hayır'}</span>
+                            </div>
+                            ${tc.triggered ? `
+                                <div class="debug-row">
+                                    <span class="debug-label">Tool</span>
+                                    <span class="debug-value highlight">${tc.tool_name || '—'}</span>
+                                </div>
+                                <div class="debug-row">
+                                    <span class="debug-label">Course Code</span>
+                                    <span class="debug-value">${tc.course_code || '—'}</span>
+                                </div>
+                            ` : `
+                                <div class="debug-row">
+                                    <span class="debug-label">Quota Check Needed</span>
+                                    <span class="debug-value muted">${tc.quota_needed ? 'Evet' : 'Hayır'}</span>
+                                </div>
+                            `}
+                        </div>
+
+                        <div class="debug-section">
+                            <div class="debug-section-title">📦 RAG</div>
+                            <div class="debug-row">
+                                <span class="debug-label">Chunks Used</span>
+                                <span class="debug-value">${d.rag_chunks || 0}</span>
+                            </div>
+                        </div>
+
+                        <div class="debug-section">
+                            <div class="debug-section-title">⏱️ Timing Breakdown</div>
+                            ${timingBarHtml}
+                            ${timingLegendHtml}
+                            <div class="debug-row" style="margin-top:0.5rem;border-top:1px solid rgba(212,197,176,0.1);padding-top:0.5rem">
+                                <span class="debug-label">Total</span>
+                                <span class="debug-value highlight">${(t.total_ms || 0).toFixed(1)}ms</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
 
             if (result.results && result.results.length > 0) {
                 html += '<div class="results"><h3>Sources</h3>';

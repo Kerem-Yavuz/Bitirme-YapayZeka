@@ -248,25 +248,26 @@ async def answer_with_tools(
     tool_result = None
     tool_used = None
     enriched_context = context
+    found_course_code = None
 
     # Step 1: Does the query need quota information?
     quota_needed = await needs_quota_check(query, llm_url)
 
     if quota_needed:
         # Step 2: Extract course code
-        course_code = await extract_course_code(query, llm_url)
+        found_course_code = await extract_course_code(query, llm_url)
 
-        if course_code:
+        if found_course_code:
             # Step 3: Fetch quota data
             tool_used = "check_quota"
-            tool_result = await check_quota(course_code)
+            tool_result = await check_quota(found_course_code)
 
             # Step 4: Add quota data to context
             quota_text = format_quota_for_prompt(tool_result)
             enriched_context = context + quota_text
 
             logger.info(
-                f"Tool '{tool_used}' called for {course_code}: "
+                f"Tool '{tool_used}' called for {found_course_code}: "
                 f"{json.dumps(tool_result, ensure_ascii=False, default=str)}"
             )
         else:
@@ -276,4 +277,6 @@ async def answer_with_tools(
         "enriched_context": enriched_context,
         "tool_used": tool_used,
         "tool_result": tool_result,
+        "course_code": found_course_code,
+        "quota_needed": quota_needed,
     }

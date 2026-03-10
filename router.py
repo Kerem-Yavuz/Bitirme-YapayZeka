@@ -12,7 +12,7 @@ Architecture:
 import asyncio
 import time
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Tuple
 
 from semantic_router import Route, RouteLayer
 from semantic_router.encoders import HuggingFaceEncoder
@@ -183,8 +183,8 @@ def get_router() -> RouteLayer:
 
 # ========================= LLM CLIENT =========================
 
-async def call_llm(base_url: str, system: str, user: str) -> str:
-    """Send chat request to a llama.cpp server."""
+async def call_llm(base_url: str, system: str, user: str) -> Tuple[str, str]:
+    """Send chat request to a llama.cpp server. Returns (answer, model_name)."""
     timeout = aiohttp.ClientTimeout(total=config.LLAMA_CPP_TIMEOUT)
 
     async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -219,7 +219,7 @@ async def call_llm(base_url: str, system: str, user: str) -> str:
                 error = await resp.text()
                 raise RuntimeError(f"LLM error: {resp.status} - {error}")
             data = await resp.json()
-            return data["choices"][0]["message"]["content"]
+            return data["choices"][0]["message"]["content"], model
 
 
 # ========================= RAG INTEGRATION =========================
@@ -259,6 +259,7 @@ async def route_and_answer(query: str, verbose: bool = True) -> Dict[str, Any]:
 
     # Step 2: REJECT if no route matched
     if route_name is None:
+        total_time = time.time() - start
         return {
             "query": query,
             "answer": REJECT_MESSAGE,
@@ -267,7 +268,26 @@ async def route_and_answer(query: str, verbose: bool = True) -> Dict[str, Any]:
                 "route": route_time,
                 "rag": 0,
                 "llm": 0,
-                "total": time.time() - start,
+                "total": total_time,
+            },
+            "debug": {
+                "route": "rejected",
+                "llm_url": None,
+                "llm_model": None,
+                "tool_calling": {
+                    "triggered": False,
+                    "tool_name": None,
+                    "course_code": None,
+                    "quota_needed": False,
+                },
+                "rag_chunks": 0,
+                "timing": {
+                    "route_ms": round(route_time * 1000, 1),
+                    "rag_ms": 0,
+                    "tool_ms": 0,
+                    "llm_ms": 0,
+                    "total_ms": round(total_time * 1000, 1),
+                },
             },
         }
 
@@ -275,9 +295,11 @@ async def route_and_answer(query: str, verbose: bool = True) -> Dict[str, Any]:
     rag_start = time.time()
     context = get_rag_context(query)
     rag_time = time.time() - rag_start
+    # Count RAG chunks (context paragraphs separated by dividers)
+    rag_chunks = context.count("---") + 1 if context and context != "(bağlam bulunamadı)" else 0
 
     if verbose:
-        logger.info(f"RAG context ({rag_time:.3f}s)")
+        logger.info(f"RAG context: {rag_chunks} chunks ({rag_time:.3f}s)")
 
     # Step 4: Pick LLM based on route
     if route_name == "easy":
@@ -287,7 +309,7 @@ async def route_and_answer(query: str, verbose: bool = True) -> Dict[str, Any]:
 
     # Step 5: Tool calling — check if quota data is needed
     tool_start = time.time()
-    tool_info = {"tool_used": None, "tool_result": None}
+    tool_info = {"tool_used": None, "tool_result": None, "course_code": None, "quota_needed": False}
     try:
         system_prompt = (
             "Sen bir üniversite ders seçim asistanısın. Verilen BAĞLAM'ı kullanarak "
@@ -305,6 +327,8 @@ async def route_and_answer(query: str, verbose: bool = True) -> Dict[str, Any]:
         tool_info = {
             "tool_used": tool_result["tool_used"],
             "tool_result": tool_result["tool_result"],
+            "course_code": tool_result.get("course_code"),
+            "quota_needed": tool_result.get("quota_needed", False),
         }
     except Exception as e:
         logger.warning(f"Tool calling failed (non-fatal): {e}")
@@ -318,8 +342,9 @@ async def route_and_answer(query: str, verbose: bool = True) -> Dict[str, Any]:
 
     # Step 7: Call LLM
     llm_start = time.time()
+    llm_model = "unknown"
     try:
-        answer = await call_llm(llm_url, system_prompt, user_prompt)
+        answer, llm_model = await call_llm(llm_url, system_prompt, user_prompt)
     except Exception as e:
         logger.error(f"LLM call failed: {e}")
         answer = f"Üzgünüm, şu anda yanıt üretemiyorum. Lütfen tekrar deneyin."
@@ -328,7 +353,7 @@ async def route_and_answer(query: str, verbose: bool = True) -> Dict[str, Any]:
     total_time = time.time() - start
 
     if verbose:
-        logger.info(f"LLM response in {llm_time:.3f}s | Total: {total_time:.3f}s")
+        logger.info(f"LLM [{llm_model}] response in {llm_time:.3f}s | Total: {total_time:.3f}s")
 
     return {
         "query": query,
@@ -341,6 +366,25 @@ async def route_and_answer(query: str, verbose: bool = True) -> Dict[str, Any]:
             "tool": tool_time,
             "llm": llm_time,
             "total": total_time,
+        },
+        "debug": {
+            "route": route_name,
+            "llm_url": llm_url,
+            "llm_model": llm_model,
+            "tool_calling": {
+                "triggered": tool_info["tool_used"] is not None,
+                "tool_name": tool_info["tool_used"],
+                "course_code": tool_info.get("course_code"),
+                "quota_needed": tool_info.get("quota_needed", False),
+            },
+            "rag_chunks": rag_chunks,
+            "timing": {
+                "route_ms": round(route_time * 1000, 1),
+                "rag_ms": round(rag_time * 1000, 1),
+                "tool_ms": round(tool_time * 1000, 1),
+                "llm_ms": round(llm_time * 1000, 1),
+                "total_ms": round(total_time * 1000, 1),
+            },
         },
     }
 
