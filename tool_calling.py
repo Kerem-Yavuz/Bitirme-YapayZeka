@@ -6,10 +6,11 @@ Provides tool calling functionality for the RAG chatbot.
 The LLM can decide to check course quota/capacity data from a
 MariaDB-backed API endpoint.
 
-Two-pass approach (works with any LLM):
-  1. First pass: Extract course code from user query
-  2. If found: Call quota API to get real-time data
-  3. Second pass: Answer with RAG context + quota data
+Optimized approach:
+  1. Regex keyword check: is this about quota? (~0ms vs ~3-5s LLM call)
+  2. Regex-first course code extraction, LLM only as fallback
+  3. If found: Call quota API to get real-time data
+  4. Enrich context with quota data for final answer
 
 Usage:
     from tool_calling import answer_with_tools
@@ -30,6 +31,48 @@ from config import config
 logger = logging.getLogger(__name__)
 
 
+# ========================= MODEL NAME CACHE =========================
+# Avoids hitting /v1/models on every single LLM call (~200ms saved each)
+
+_model_cache: Dict[str, str] = {}
+
+
+async def _get_model_name(session: aiohttp.ClientSession, base_url: str) -> str:
+    """Get model name, cached per base_url."""
+    if base_url in _model_cache:
+        return _model_cache[base_url]
+
+    model = "default"
+    try:
+        async with session.get(f"{base_url}/v1/models") as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                if data.get("data") and len(data["data"]) > 0:
+                    model = data["data"][0]["id"]
+    except Exception:
+        pass
+
+    _model_cache[base_url] = model
+    return model
+
+
+# ========================= QUOTA KEYWORD PATTERNS =========================
+# Replaces needs_quota_check LLM call with instant regex (~0ms vs ~3-5s)
+
+_QUOTA_KEYWORDS = re.compile(
+    r'kontenjan|kapasite|kota|quota|capacity|dolu\s*mu|bo[şs]\s*yer|'
+    r'ka[çc]\s*ki[şs]i\s*al|ne\s*kadar\s*yer|enrolled|available|'
+    r'yer\s*var\s*m[ıi]|yer\s*kald[ıi]\s*m[ıi]|doluluk|'
+    r'ka[çc]\s*ki[şs]i\s*kay[ıi]t|full|spots?\s*left',
+    re.IGNORECASE
+)
+
+# Course code pattern: 2-4 letters + 3-4 digits (e.g., BIL101, MAT2010)
+_COURSE_CODE_REGEX = re.compile(
+    r'\b([A-ZÇĞİÖŞÜa-zçğıöşü]{2,4})\s*(\d{3,4})\b'
+)
+
+
 # ========================= QUOTA TOOL =========================
 
 EXTRACT_COURSE_CODE_PROMPT = (
@@ -40,11 +83,58 @@ EXTRACT_COURSE_CODE_PROMPT = (
     "Başka hiçbir şey yazma, açıklama yapma."
 )
 
-NEEDS_QUOTA_CHECK_PROMPT = (
-    "Kullanıcı sorusu bir dersin kontenjanı, kapasitesi, kaç kişinin aldığı, "
-    "dolup dolmadığı veya boş yer olup olmadığı hakkında mı?\n"
-    "Sadece 'EVET' veya 'HAYIR' yaz. Başka bir şey yazma."
-)
+
+def needs_quota_check(query: str) -> bool:
+    """
+    Check if the query is about course quota/capacity using regex keywords.
+    ~0ms instead of ~3-5s LLM call.
+    """
+    result = bool(_QUOTA_KEYWORDS.search(query))
+    logger.info(f"Quota check needed? (regex): {result}")
+    return result
+
+
+def extract_course_code_regex(query: str) -> Optional[str]:
+    """
+    Try to extract course code from query using regex.
+    Returns uppercase code like 'BIL101' or None.
+    ~0ms instead of ~3-5s LLM call.
+    """
+    match = _COURSE_CODE_REGEX.search(query)
+    if match:
+        code = (match.group(1) + match.group(2)).upper()
+        logger.info(f"Course code extracted (regex): {code}")
+        return code
+    return None
+
+
+async def extract_course_code_llm(query: str, llm_url: str) -> Optional[str]:
+    """
+    Extract course code from user query using LLM (fallback).
+    Only called when regex fails.
+    """
+    try:
+        response = await _call_llm_simple(
+            llm_url, EXTRACT_COURSE_CODE_PROMPT, query
+        )
+        code = response.strip().upper()
+
+        if "YOK" in code or len(code) < 3 or len(code) > 15:
+            logger.info(f"No course code found by LLM in query: '{query}'")
+            return None
+
+        # Clean up: remove any extra text, keep only alphanumeric
+        code = re.sub(r'[^A-Z0-9ÇĞİÖŞÜ ]', '', code).strip()
+
+        if code:
+            logger.info(f"Course code extracted (LLM fallback): {code}")
+            return code
+
+        return None
+
+    except Exception as e:
+        logger.warning(f"Course code extraction (LLM) failed: {e}")
+        return None
 
 
 async def _call_llm_simple(base_url: str, system: str, user: str) -> str:
@@ -52,16 +142,7 @@ async def _call_llm_simple(base_url: str, system: str, user: str) -> str:
     timeout = aiohttp.ClientTimeout(total=config.QUOTA_API_TIMEOUT + 20)
 
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        # Auto-detect model
-        model = "default"
-        try:
-            async with session.get(f"{base_url}/v1/models") as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    if data.get("data") and len(data["data"]) > 0:
-                        model = data["data"][0]["id"]
-        except Exception:
-            pass
+        model = await _get_model_name(session, base_url)
 
         payload = {
             "model": model,
@@ -84,52 +165,6 @@ async def _call_llm_simple(base_url: str, system: str, user: str) -> str:
                 raise RuntimeError(f"LLM error: {resp.status} - {error}")
             data = await resp.json()
             return data["choices"][0]["message"]["content"].strip()
-
-
-async def needs_quota_check(query: str, llm_url: str) -> bool:
-    """
-    Ask the LLM if the query is about course quota/capacity.
-    Returns True if quota data should be fetched.
-    """
-    try:
-        response = await _call_llm_simple(
-            llm_url, NEEDS_QUOTA_CHECK_PROMPT, query
-        )
-        result = response.strip().upper()
-        logger.info(f"Quota check needed? LLM says: {result}")
-        return "EVET" in result
-    except Exception as e:
-        logger.warning(f"Quota check detection failed: {e}")
-        return False
-
-
-async def extract_course_code(query: str, llm_url: str) -> Optional[str]:
-    """
-    Extract course code from user query using LLM.
-    Returns the course code string or None if not found.
-    """
-    try:
-        response = await _call_llm_simple(
-            llm_url, EXTRACT_COURSE_CODE_PROMPT, query
-        )
-        code = response.strip().upper()
-
-        if "YOK" in code or len(code) < 3 or len(code) > 15:
-            logger.info(f"No course code found in query: '{query}'")
-            return None
-
-        # Clean up: remove any extra text, keep only alphanumeric
-        code = re.sub(r'[^A-Z0-9ÇĞİÖŞÜ ]', '', code).strip()
-
-        if code:
-            logger.info(f"Extracted course code: {code}")
-            return code
-
-        return None
-
-    except Exception as e:
-        logger.warning(f"Course code extraction failed: {e}")
-        return None
 
 
 async def check_quota(course_code: str) -> Dict[str, Any]:
@@ -239,23 +274,35 @@ async def answer_with_tools(
     Orchestrate tool calling: check if quota is needed, fetch it,
     then build final prompt with all data.
 
+    Optimized flow:
+      1. Regex keyword check (~0ms vs ~3-5s LLM)
+      2. Regex course code extraction (~0ms), LLM fallback only if regex misses
+      3. API call for quota data
+
     Returns:
         Dict with:
             - "enriched_context": context + quota data (if any)
             - "tool_used": name of tool used or None
             - "tool_result": raw tool result or None
+            - "course_code": extracted course code or None
+            - "quota_needed": whether quota was needed
     """
     tool_result = None
     tool_used = None
     enriched_context = context
     found_course_code = None
 
-    # Step 1: Does the query need quota information?
-    quota_needed = await needs_quota_check(query, llm_url)
+    # Step 1: Regex keyword check (~0ms)
+    quota_needed = needs_quota_check(query)
 
     if quota_needed:
-        # Step 2: Extract course code
-        found_course_code = await extract_course_code(query, llm_url)
+        # Step 2a: Try regex first (~0ms)
+        found_course_code = extract_course_code_regex(query)
+
+        # Step 2b: Fall back to LLM only if regex missed (~3-5s)
+        if not found_course_code:
+            logger.info("Regex didn't find course code, trying LLM fallback...")
+            found_course_code = await extract_course_code_llm(query, llm_url)
 
         if found_course_code:
             # Step 3: Fetch quota data
@@ -280,3 +327,4 @@ async def answer_with_tools(
         "course_code": found_course_code,
         "quota_needed": quota_needed,
     }
+

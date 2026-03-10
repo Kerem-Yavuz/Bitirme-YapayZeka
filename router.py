@@ -20,7 +20,7 @@ from semantic_router.encoders import HuggingFaceEncoder
 import aiohttp
 
 from config import config
-from tool_calling import answer_with_tools
+from tool_calling import answer_with_tools, _get_model_name
 
 logging.basicConfig(
     level=logging.INFO,
@@ -188,16 +188,7 @@ async def call_llm(base_url: str, system: str, user: str) -> Tuple[str, str]:
     timeout = aiohttp.ClientTimeout(total=config.LLAMA_CPP_TIMEOUT)
 
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        # Auto-detect model
-        model = "default"
-        try:
-            async with session.get(f"{base_url}/v1/models") as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    if data.get("data") and len(data["data"]) > 0:
-                        model = data["data"][0]["id"]
-        except Exception:
-            pass
+        model = await _get_model_name(session, base_url)
 
         payload = {
             "model": model,

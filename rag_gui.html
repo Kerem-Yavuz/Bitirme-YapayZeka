@@ -1160,22 +1160,36 @@
         function displayIndexInfo(info) {
             const container = document.getElementById('info-results');
 
+            // Cache stats (may or may not be present)
+            const cache = info.cache_stats || {};
+            let cacheHtml = '';
+            if (cache.total !== undefined) {
+                cacheHtml = `
+                    <div class="result-item">
+                        <h3>Embedding Cache</h3>
+                        <p><strong>Total Cached:</strong> ${(cache.total || 0).toLocaleString()}</p>
+                    </div>
+                `;
+            }
+
             container.innerHTML = `
                 <div class="results" style="margin-top: 2rem;">
                     <div class="result-item">
-                        <h3>Index Statistics</h3>
-                        <p><strong>Total Chunks:</strong> ${info.total_chunks}</p>
-                        <p><strong>Unique Sources:</strong> ${info.unique_sources}</p>
-                        <p><strong>Total Characters:</strong> ${info.total_characters.toLocaleString()}</p>
-                        <p><strong>Average Chunk Size:</strong> ${info.avg_chunk_size.toFixed(0)} chars</p>
+                        <h3>Collection: ${info.collection || '—'}</h3>
+                        <p><strong>Qdrant URL:</strong> ${info.qdrant_url || '—'}</p>
+                        <p><strong>Status:</strong> ${info.status || '—'}</p>
+                        <p><strong>Points Count:</strong> ${(info.points_count || 0).toLocaleString()}</p>
+                        <p><strong>Vectors Count:</strong> ${(info.vectors_count || 0).toLocaleString()}</p>
                     </div>
                     <div class="result-item">
                         <h3>Configuration</h3>
-                        <p><strong>Embed Model:</strong> ${info.config.embed_model}</p>
-                        <p><strong>Chunk Size:</strong> ${info.config.chunk_size}</p>
-                        <p><strong>Vector Dimension:</strong> ${info.config.dimension}</p>
-                        <p><strong>Device:</strong> ${info.config.device}</p>
+                        <p><strong>Embed Model:</strong> ${info.config ? info.config.embed_model : '—'}</p>
+                        <p><strong>Chunk Size:</strong> ${info.config ? info.config.chunk_size : '—'}</p>
+                        <p><strong>Chunk Overlap:</strong> ${info.config ? info.config.chunk_overlap : '—'}</p>
+                        <p><strong>Device:</strong> ${info.config ? info.config.device : '—'}</p>
+                        <p><strong>LLM URL:</strong> ${info.config ? info.config.llama_cpp_url : '—'}</p>
                     </div>
+                    ${cacheHtml}
                 </div>
             `;
         }
