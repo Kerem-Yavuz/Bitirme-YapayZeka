@@ -20,7 +20,7 @@ from semantic_router.encoders import HuggingFaceEncoder
 import aiohttp
 
 from config import config
-from tool_calling import answer_with_tools, _get_model_name
+from tool_calling import answer_with_tools, _get_model_name, _model_cache
 
 logging.basicConfig(
     level=logging.INFO,
