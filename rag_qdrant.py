@@ -544,9 +544,19 @@ class VectorIndex:
         """Get collection statistics from Qdrant."""
         try:
             info = self.client.get_collection(self.collection_name)
+
+            # vectors_count was removed in Qdrant server v1.17+
+            # Try multiple locations gracefully
+            vectors_count = getattr(info, "vectors_count", None)
+            if vectors_count is None:
+                # v1.17+: count is inside indexed_vectors_count or points_count
+                vectors_count = getattr(info, "indexed_vectors_count", None)
+            if vectors_count is None:
+                vectors_count = getattr(info, "points_count", 0)
+
             return {
                 "points_count": info.points_count,
-                "vectors_count": info.vectors_count,
+                "vectors_count": vectors_count,
                 "status": str(info.status),
             }
         except Exception as e:
