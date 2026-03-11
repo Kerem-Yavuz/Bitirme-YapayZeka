@@ -842,21 +842,112 @@
             return response.json();
         }
 
-        // Ask handler
+        // Ask handler — streaming version
         async function handleAsk(event) {
             event.preventDefault();
 
             const question = document.getElementById('question').value;
             const topk = parseInt(document.getElementById('ask-topk').value);
+            const container = document.getElementById('ask-results');
 
             document.getElementById('ask-loading').classList.add('active');
-            document.getElementById('ask-results').innerHTML = '';
+            container.innerHTML = '';
+
+            // Prepare the answer box immediately so text appears in real-time
+            container.innerHTML = `
+                <div class="answer-box" id="stream-answer-box">
+                    <div class="mode-badge mode-rag" id="stream-route-badge">…</div>
+                    <h3>Answer</h3>
+                    <div class="answer-text" id="stream-answer-text" style="white-space:pre-wrap;min-height:2rem"></div>
+                    <div class="timing-info" id="stream-timing" style="display:none"></div>
+                </div>
+            `;
+
+            const answerEl = document.getElementById('stream-answer-text');
+            const routeBadge = document.getElementById('stream-route-badge');
+            const timingEl = document.getElementById('stream-timing');
+
+            let metaInfo = null;
+            let buffer = '';
 
             try {
-                const result = await callAPI('ask', { question, top_k: topk });
-                displayAskResults(result);
+                const response = await fetch('/api/ask/stream', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ question, top_k: topk }),
+                });
+
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.error || 'Stream error');
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+
+                    // Process complete SSE lines
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop(); // keep incomplete last line
+
+                    for (const line of lines) {
+                        if (!line.startsWith('data:')) continue;
+                        const jsonStr = line.slice(5).trim();
+                        if (!jsonStr) continue;
+
+                        try {
+                            const evt = JSON.parse(jsonStr);
+
+                            if (evt.type === 'meta') {
+                                metaInfo = evt;
+                                const route = evt.route || 'unknown';
+                                routeBadge.textContent = route.toUpperCase();
+                                routeBadge.className = `mode-badge ${route === 'rejected' ? 'mode-fallback' : 'mode-rag'}`;
+
+                            } else if (evt.type === 'token') {
+                                answerEl.textContent += evt.token;
+                                // Auto-scroll
+                                answerEl.scrollIntoView({ behavior: 'smooth', block: 'end' });
+
+                            } else if (evt.type === 'done') {
+                                const t = evt.timing || {};
+                                timingEl.style.display = '';
+                                timingEl.innerHTML = `
+                                    <span>Route: ${(t.route_ms || 0).toFixed(1)}ms</span>
+                                    <span>RAG: ${(t.rag_ms || 0).toFixed(1)}ms</span>
+                                    <span>LLM: ${(t.llm_ms || 0).toFixed(1)}ms</span>
+                                    <span>Total: ${(t.total_ms || 0).toFixed(1)}ms</span>
+                                `;
+
+                                // Append debug panel if meta was received
+                                if (metaInfo) {
+                                    const fakeResult = {
+                                        debug: {
+                                            route: metaInfo.route,
+                                            llm_url: metaInfo.llm_url,
+                                            llm_model: metaInfo.llm_model,
+                                            rag_chunks: metaInfo.rag_chunks || 0,
+                                            tool_calling: metaInfo.tool_calling || {},
+                                            timing: t,
+                                        }
+                                    };
+                                    // Reuse existing debug panel builder
+                                    const tmp = document.createElement('div');
+                                    tmp.innerHTML = buildDebugPanelHtml(fakeResult.debug, t);
+                                    container.appendChild(tmp.firstElementChild);
+                                    container.appendChild(tmp.firstElementChild);
+                                }
+                            }
+                        } catch (e) { /* skip malformed event */ }
+                    }
+                }
             } catch (error) {
-                document.getElementById('ask-results').innerHTML = `
+                container.innerHTML = `
                     <div class="status-message status-error">
                         Error: ${error.message}
                     </div>
@@ -866,10 +957,87 @@
             }
         }
 
+
+        function buildDebugPanelHtml(d, t) {
+            const tc = d.tool_calling || {};
+            t = t || d.timing || {};
+
+            const routeColor = d.route === 'easy' ? '#6bdb73' : d.route === 'hard' ? '#ff6b7a' : '#706860';
+            const totalMs = t.total_ms || 1;
+            const segments = [
+                { label: 'Route', ms: t.route_ms || 0, color: '#6b8e70' },
+                { label: 'RAG', ms: t.rag_ms || 0, color: '#d4c5b0' },
+                { label: 'Tool', ms: t.tool_ms || 0, color: '#e6a23c' },
+                { label: 'LLM', ms: t.llm_ms || 0, color: '#e63946' },
+            ];
+
+            let timingBarHtml = '<div class="debug-timing-bar">';
+            segments.forEach(s => {
+                const pct = Math.max((s.ms / totalMs) * 100, 0.5);
+                timingBarHtml += `<div class="debug-timing-segment" style="width:${pct}%;background:${s.color}"></div>`;
+            });
+            timingBarHtml += '</div>';
+
+            let timingLegendHtml = '<div class="debug-timing-legend">';
+            segments.forEach(s => {
+                timingLegendHtml += `
+                    <div class="debug-timing-legend-item">
+                        <span class="debug-timing-dot" style="background:${s.color}"></span>
+                        <span class="debug-label">${s.label}:</span>
+                        <span class="debug-value">${s.ms.toFixed(1)}ms</span>
+                    </div>`;
+            });
+            timingLegendHtml += '</div>';
+
+            return `
+                <button class="debug-toggle" onclick="this.nextElementSibling.classList.toggle('open'); this.textContent = this.nextElementSibling.classList.contains('open') ? '🛠 Debug ▲' : '🛠 Debug ▼'">
+                    🛠 Debug ▼
+                </button>
+                <div class="debug-panel">
+                    <div class="debug-section">
+                        <div class="debug-section-title">🔀 Routing</div>
+                        <div class="debug-row">
+                            <span class="debug-label">Route</span>
+                            <span class="debug-value" style="color:${routeColor}">${(d.route || 'unknown').toUpperCase()}</span>
+                        </div>
+                    </div>
+                    <div class="debug-section">
+                        <div class="debug-section-title">🤖 LLM</div>
+                        <div class="debug-row"><span class="debug-label">Model</span><span class="debug-value highlight">${d.llm_model || '—'}</span></div>
+                        <div class="debug-row"><span class="debug-label">URL</span><span class="debug-value muted">${d.llm_url || '—'}</span></div>
+                    </div>
+                    <div class="debug-section">
+                        <div class="debug-section-title">🔧 Tool Calling</div>
+                        <div class="debug-row">
+                            <span class="debug-label">Triggered</span>
+                            <span class="debug-value ${tc.triggered ? 'success' : 'muted'}">${tc.triggered ? 'Evet ✅' : 'Hayır'}</span>
+                        </div>
+                        ${tc.triggered ? `
+                            <div class="debug-row"><span class="debug-label">Tool</span><span class="debug-value highlight">${tc.tool_name || '—'}</span></div>
+                            <div class="debug-row"><span class="debug-label">Course Code</span><span class="debug-value">${tc.course_code || '—'}</span></div>
+                        ` : `
+                            <div class="debug-row"><span class="debug-label">Quota Check Needed</span><span class="debug-value muted">${tc.quota_needed ? 'Evet' : 'Hayır'}</span></div>
+                        `}
+                    </div>
+                    <div class="debug-section">
+                        <div class="debug-section-title">📦 RAG</div>
+                        <div class="debug-row"><span class="debug-label">Chunks Used</span><span class="debug-value">${d.rag_chunks || 0}</span></div>
+                    </div>
+                    <div class="debug-section">
+                        <div class="debug-section-title">⏱️ Timing Breakdown</div>
+                        ${timingBarHtml}
+                        ${timingLegendHtml}
+                        <div class="debug-row" style="margin-top:0.5rem;border-top:1px solid rgba(212,197,176,0.1);padding-top:0.5rem">
+                            <span class="debug-label">Total</span>
+                            <span class="debug-value highlight">${(t.total_ms || 0).toFixed(1)}ms</span>
+                        </div>
+                    </div>
+                </div>`;
+        }
+
         function displayAskResults(result) {
             const container = document.getElementById('ask-results');
 
-            // Handle both router format (route/timing.route/timing.rag) and RAG format (mode/timing.search)
             const mode = result.route || result.mode || 'unknown';
             const answer = result.answer || result.error || 'Yanıt alınamadı.';
             const searchTime = (result.timing && (result.timing.search || result.timing.rag || result.timing.route)) || 0;
@@ -891,110 +1059,8 @@
                 </div>
             `;
 
-            // Debug panel
             if (result.debug) {
-                const d = result.debug;
-                const tc = d.tool_calling || {};
-                const t = d.timing || {};
-
-                // Route badge color
-                const routeColor = d.route === 'easy' ? '#6bdb73' : d.route === 'hard' ? '#ff6b7a' : '#706860';
-
-                // Timing bar segments
-                const totalMs = t.total_ms || 1;
-                const segments = [
-                    { label: 'Route', ms: t.route_ms || 0, color: '#6b8e70' },
-                    { label: 'RAG', ms: t.rag_ms || 0, color: '#d4c5b0' },
-                    { label: 'Tool', ms: t.tool_ms || 0, color: '#e6a23c' },
-                    { label: 'LLM', ms: t.llm_ms || 0, color: '#e63946' },
-                ];
-
-                let timingBarHtml = '<div class="debug-timing-bar">';
-                segments.forEach(s => {
-                    const pct = Math.max((s.ms / totalMs) * 100, 0.5);
-                    timingBarHtml += `<div class="debug-timing-segment" style="width:${pct}%;background:${s.color}"></div>`;
-                });
-                timingBarHtml += '</div>';
-
-                let timingLegendHtml = '<div class="debug-timing-legend">';
-                segments.forEach(s => {
-                    timingLegendHtml += `
-                        <div class="debug-timing-legend-item">
-                            <span class="debug-timing-dot" style="background:${s.color}"></span>
-                            <span class="debug-label">${s.label}:</span>
-                            <span class="debug-value">${s.ms.toFixed(1)}ms</span>
-                        </div>
-                    `;
-                });
-                timingLegendHtml += '</div>';
-
-                html += `
-                    <button class="debug-toggle" onclick="this.nextElementSibling.classList.toggle('open'); this.textContent = this.nextElementSibling.classList.contains('open') ? '🛠 Debug ▲' : '🛠 Debug ▼'">
-                        🛠 Debug ▼
-                    </button>
-                    <div class="debug-panel">
-                        <div class="debug-section">
-                            <div class="debug-section-title">🔀 Routing</div>
-                            <div class="debug-row">
-                                <span class="debug-label">Route</span>
-                                <span class="debug-value" style="color:${routeColor}">${(d.route || 'unknown').toUpperCase()}</span>
-                            </div>
-                        </div>
-
-                        <div class="debug-section">
-                            <div class="debug-section-title">🤖 LLM</div>
-                            <div class="debug-row">
-                                <span class="debug-label">Model</span>
-                                <span class="debug-value highlight">${d.llm_model || '—'}</span>
-                            </div>
-                            <div class="debug-row">
-                                <span class="debug-label">URL</span>
-                                <span class="debug-value muted">${d.llm_url || '—'}</span>
-                            </div>
-                        </div>
-
-                        <div class="debug-section">
-                            <div class="debug-section-title">🔧 Tool Calling</div>
-                            <div class="debug-row">
-                                <span class="debug-label">Triggered</span>
-                                <span class="debug-value ${tc.triggered ? 'success' : 'muted'}">${tc.triggered ? 'Evet ✅' : 'Hayır'}</span>
-                            </div>
-                            ${tc.triggered ? `
-                                <div class="debug-row">
-                                    <span class="debug-label">Tool</span>
-                                    <span class="debug-value highlight">${tc.tool_name || '—'}</span>
-                                </div>
-                                <div class="debug-row">
-                                    <span class="debug-label">Course Code</span>
-                                    <span class="debug-value">${tc.course_code || '—'}</span>
-                                </div>
-                            ` : `
-                                <div class="debug-row">
-                                    <span class="debug-label">Quota Check Needed</span>
-                                    <span class="debug-value muted">${tc.quota_needed ? 'Evet' : 'Hayır'}</span>
-                                </div>
-                            `}
-                        </div>
-
-                        <div class="debug-section">
-                            <div class="debug-section-title">📦 RAG</div>
-                            <div class="debug-row">
-                                <span class="debug-label">Chunks Used</span>
-                                <span class="debug-value">${d.rag_chunks || 0}</span>
-                            </div>
-                        </div>
-
-                        <div class="debug-section">
-                            <div class="debug-section-title">⏱️ Timing Breakdown</div>
-                            ${timingBarHtml}
-                            ${timingLegendHtml}
-                            <div class="debug-row" style="margin-top:0.5rem;border-top:1px solid rgba(212,197,176,0.1);padding-top:0.5rem">
-                                <span class="debug-label">Total</span>
-                                <span class="debug-value highlight">${(t.total_ms || 0).toFixed(1)}ms</span>
-                            </div>
-                        </div>
-                    </div>
-                `;
+                html += buildDebugPanelHtml(result.debug, result.debug.timing);
             }
 
             if (result.results && result.results.length > 0) {
@@ -1016,6 +1082,8 @@
 
             container.innerHTML = html;
         }
+
+
 
         // Search handler
         async function handleSearch(event) {

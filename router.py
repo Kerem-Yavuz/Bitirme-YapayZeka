@@ -214,6 +214,170 @@ async def call_llm(base_url: str, system: str, user: str) -> Tuple[str, str]:
             return data["choices"][0]["message"]["content"], model
 
 
+async def call_llm_stream(base_url: str, system: str, user: str):
+    """
+    Stream tokens from llama.cpp server.
+    Yields (token: str, model: str) tuples — model is sent only on first chunk.
+    """
+    import json as _json
+
+    timeout = aiohttp.ClientTimeout(total=config.LLAMA_CPP_TIMEOUT)
+
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        model = await _get_model_name(session, base_url)
+
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "temperature": config.LLAMA_CPP_TEMPERATURE,
+            "max_tokens": config.LLAMA_CPP_MAX_TOKENS,
+            "stream": True,
+        }
+
+        async with session.post(
+            f"{base_url}/v1/chat/completions",
+            json=payload,
+            headers={"Content-Type": "application/json"},
+        ) as resp:
+            if resp.status != 200:
+                error = await resp.text()
+                raise RuntimeError(f"LLM stream error: {resp.status} - {error}")
+
+            first = True
+            async for line in resp.content:
+                line = line.decode("utf-8").strip()
+                if not line or not line.startswith("data:"):
+                    continue
+                data_str = line[5:].strip()
+                if data_str == "[DONE]":
+                    break
+                try:
+                    chunk = _json.loads(data_str)
+                    delta = chunk["choices"][0]["delta"]
+                    token = delta.get("content", "")
+                    if token:
+                        yield token, model if first else ""
+                        first = False
+                except Exception:
+                    continue
+
+
+async def route_and_answer_stream(query: str):
+    """
+    Like route_and_answer but streams LLM tokens as SSE events.
+    Yields SSE-formatted strings.
+
+    SSE events:
+      data: {"type": "meta", "route": ..., "llm_url": ..., "llm_model": ...}
+      data: {"type": "token", "token": "..."}
+      data: {"type": "done", "timing": {...}}
+    """
+    import json as _json
+
+    def sse(obj) -> str:
+        return f"data: {_json.dumps(obj, ensure_ascii=False)}\n\n"
+
+    start = time.time()
+
+    # Step 1: Route
+    router = get_router()
+    route_start = time.time()
+    route_result = router(query)
+    route_time = time.time() - route_start
+    route_name = route_result.name if route_result else None
+
+    logger.info(f"[stream] Route: {route_name or 'REJECTED'} ({route_time*1000:.1f}ms)")
+
+    # Step 2: Rejected
+    if route_name is None:
+        yield sse({"type": "meta", "route": "rejected", "llm_url": None, "llm_model": None})
+        yield sse({"type": "token", "token": REJECT_MESSAGE})
+        yield sse({"type": "done", "timing": {"total_ms": round((time.time() - start) * 1000, 1)}})
+        return
+
+    # Step 3: Pick LLM
+    llm_url = config.EASY_LLM_URL if route_name == "easy" else config.HARD_LLM_URL
+
+    # Step 4: RAG context
+    rag_start = time.time()
+    context = get_rag_context(query)
+    rag_time = time.time() - rag_start
+    rag_chunks = context.count("---") + 1 if context and context != "(bağlam bulunamadı)" else 0
+
+    # Step 5: Tool calling
+    tool_start = time.time()
+    system_prompt = (
+        "Sen bir üniversite ders seçim asistanısın. Verilen BAĞLAM'ı kullanarak "
+        "öğrencinin sorusunu yanıtla. Kaynaklarını belirt. "
+        "BAĞLAM yetersizse bunu söyle ve genel bilgini ekle. "
+        "Sadece ders seçimi ve akademik konularda yardımcı ol."
+    )
+    tool_info = {"tool_used": None, "course_code": None, "quota_needed": False}
+    try:
+        tool_result = await answer_with_tools(
+            query=query, context=context, llm_url=llm_url, system_prompt=system_prompt,
+        )
+        context = tool_result["enriched_context"]
+        tool_info = {
+            "tool_used": tool_result["tool_used"],
+            "course_code": tool_result.get("course_code"),
+            "quota_needed": tool_result.get("quota_needed", False),
+        }
+    except Exception as e:
+        logger.warning(f"[stream] Tool calling failed: {e}")
+    tool_time = time.time() - tool_start
+
+    user_prompt = f"Soru: {query}\n\nBAĞLAM:\n{context}\n\nCevap:"
+
+    # Step 6: Send meta info before streaming starts
+    llm_model = _model_cache.get(llm_url, "unknown")
+    yield sse({
+        "type": "meta",
+        "route": route_name,
+        "llm_url": llm_url,
+        "llm_model": llm_model,
+        "rag_chunks": rag_chunks,
+        "tool_calling": {
+            "triggered": tool_info["tool_used"] is not None,
+            "tool_name": tool_info["tool_used"],
+            "course_code": tool_info.get("course_code"),
+            "quota_needed": tool_info.get("quota_needed", False),
+        },
+    })
+
+    # Step 7: Stream LLM tokens
+    llm_start = time.time()
+    detected_model = llm_model
+    try:
+        async for token, model_name in call_llm_stream(llm_url, system_prompt, user_prompt):
+            if model_name:
+                detected_model = model_name
+            yield sse({"type": "token", "token": token})
+    except Exception as e:
+        logger.error(f"[stream] LLM stream failed: {e}")
+        yield sse({"type": "token", "token": f"\n\n[Hata: {e}]"})
+
+    llm_time = time.time() - llm_start
+    total_time = time.time() - start
+    logger.info(f"[stream] LLM [{detected_model}] streamed in {llm_time:.3f}s | Total: {total_time:.3f}s")
+
+    # Step 8: Done event with timing
+    yield sse({
+        "type": "done",
+        "timing": {
+            "route_ms": round(route_time * 1000, 1),
+            "rag_ms": round(rag_time * 1000, 1),
+            "tool_ms": round(tool_time * 1000, 1),
+            "llm_ms": round(llm_time * 1000, 1),
+            "total_ms": round(total_time * 1000, 1),
+        },
+    })
+
+
+
 # ========================= RAG INTEGRATION =========================
 
 _rag_index = None

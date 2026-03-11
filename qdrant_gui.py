@@ -30,7 +30,7 @@ except ImportError as e:
     sys.exit(1)
 
 try:
-    from router import route_and_answer, get_router
+    from router import route_and_answer, route_and_answer_stream, get_router
     ROUTER_AVAILABLE = True
 except Exception as e:
     ROUTER_AVAILABLE = False
@@ -111,6 +111,58 @@ def api_ask():
     except Exception as e:
         app.logger.error(f"Error in ask endpoint: {e}")
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ask/stream', methods=['POST'])
+def api_ask_stream():
+    """
+    Streaming version of /api/ask — returns SSE (Server-Sent Events).
+    Each event is a JSON object:
+      {"type": "meta", "route": ..., "llm_model": ..., ...}
+      {"type": "token", "token": "..."}
+      {"type": "done", "timing": {...}}
+    """
+    from flask import Response, stream_with_context
+
+    if not ROUTER_AVAILABLE:
+        return jsonify({'error': 'Router not available'}), 500
+
+    data = request.json
+    question = data.get('question')
+    if not question:
+        return jsonify({'error': 'Question is required'}), 400
+
+    def generate():
+        import asyncio as _asyncio
+
+        async def _collect():
+            async for chunk in route_and_answer_stream(question):
+                yield chunk
+
+        async def _run():
+            async for chunk in _collect():
+                yield chunk
+
+        loop = _asyncio.new_event_loop()
+        try:
+            gen = _run()
+            while True:
+                try:
+                    chunk = loop.run_until_complete(gen.__anext__())
+                    yield chunk
+                except StopAsyncIteration:
+                    break
+        finally:
+            loop.close()
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+        },
+    )
 
 
 @app.route('/api/search', methods=['POST'])
