@@ -176,6 +176,7 @@ def get_router() -> SemanticRouter:
         _router_instance = SemanticRouter(
             encoder=encoder,
             routes=[easy_route, hard_route],
+            auto_sync="local",
         )
         logger.info("Router ready!")
     return _router_instance
