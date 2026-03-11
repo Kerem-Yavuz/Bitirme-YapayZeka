@@ -215,12 +215,26 @@ async def call_llm(base_url: str, system: str, user: str) -> Tuple[str, str]:
 
 # ========================= RAG INTEGRATION =========================
 
+_rag_index = None
+
+
+def get_rag_index():
+    """Get or create the RAG VectorIndex (singleton — model loads once)."""
+    global _rag_index
+    if _rag_index is None:
+        from rag_qdrant import VectorIndex
+        logger.info("Loading embedding model for RAG...")
+        _rag_index = VectorIndex()
+        _rag_index.ensure_ready()
+        logger.info("RAG index ready.")
+    return _rag_index
+
+
 def get_rag_context(query: str, top_k: int = 5) -> str:
     """Search Qdrant and return context."""
     try:
-        from rag_qdrant import VectorIndex, build_context
-        index = VectorIndex()
-        index.ensure_ready()
+        from rag_qdrant import build_context
+        index = get_rag_index()
         results = index.search(query, top_k=top_k)
         if results:
             return build_context(results)
