@@ -35,7 +35,7 @@ DEFAULTS = {
     "QDRANT_CACHE_COLLECTION": "_embedding_cache",
 
     # Embedding
-    "EMBED_MODEL": "all-MiniLM-L6-v2",
+    "EMBED_MODEL": "sentence-transformers/all-MiniLM-L6-v2",
     "EMBED_BATCH_SIZE": "128",
     "EMBED_DEVICE": "cuda" if torch.cuda.is_available() else "cpu",
 
