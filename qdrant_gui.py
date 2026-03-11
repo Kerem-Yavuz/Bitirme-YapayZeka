@@ -237,7 +237,7 @@ def health():
     collections_status = {}
 
     try:
-        client = QdrantClient(url=config.QDRANT_URL)
+        client = QdrantClient(url=config.QDRANT_URL, check_compatibility=False)
         existing = [c.name for c in client.get_collections().collections]
         qdrant_available = True
 
@@ -262,7 +262,7 @@ def reset_qdrant():
     """Delete Qdrant collections and start fresh."""
     try:
         from qdrant_client import QdrantClient
-        client = QdrantClient(url=config.QDRANT_URL)
+        client = QdrantClient(url=config.QDRANT_URL, check_compatibility=False)
 
         deleted = []
         for coll in [config.QDRANT_COLLECTION, config.QDRANT_CONFIG_COLLECTION,

@@ -136,7 +136,7 @@ def save_config_to_qdrant(client=None):
     from qdrant_client.http import models
 
     if client is None:
-        client = QdrantClient(url=config.QDRANT_URL)
+        client = QdrantClient(url=config.QDRANT_URL, check_compatibility=False)
 
     collection = config.QDRANT_CONFIG_COLLECTION
 
@@ -183,7 +183,7 @@ def load_config_from_qdrant(client=None) -> dict | None:
     from qdrant_client import QdrantClient
 
     if client is None:
-        client = QdrantClient(url=config.QDRANT_URL)
+        client = QdrantClient(url=config.QDRANT_URL, check_compatibility=False)
 
     collection = config.QDRANT_CONFIG_COLLECTION
 

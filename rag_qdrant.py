@@ -392,7 +392,7 @@ class VectorIndex:
         self.model = SentenceTransformer(config.EMBED_MODEL, device=self.device)
         self.dimension = self.model.get_sentence_embedding_dimension()
 
-        self.client = QdrantClient(url=config.QDRANT_URL, timeout=120)
+        self.client = QdrantClient(url=config.QDRANT_URL, timeout=120, check_compatibility=False)
         self.collection_name = config.QDRANT_COLLECTION
         self.cache = QdrantEmbeddingCache(self.client, self.dimension)
         self.chunks: List[DocChunk] = []
