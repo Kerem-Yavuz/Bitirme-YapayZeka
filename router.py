@@ -14,7 +14,7 @@ import time
 import logging
 from typing import Dict, Any, Tuple
 
-from semantic_router import Route, RouteLayer
+from semantic_router import Route, SemanticRouter
 from semantic_router.encoders import HuggingFaceEncoder
 
 import aiohttp
@@ -167,13 +167,13 @@ hard_route = Route(
 _router_instance = None
 
 
-def get_router() -> RouteLayer:
+def get_router() -> SemanticRouter:
     """Get or create the semantic router (singleton)."""
     global _router_instance
     if _router_instance is None:
         logger.info(f"Initializing semantic router with {config.EMBED_MODEL}...")
         encoder = HuggingFaceEncoder(name=config.EMBED_MODEL)
-        _router_instance = RouteLayer(
+        _router_instance = SemanticRouter(
             encoder=encoder,
             routes=[easy_route, hard_route],
         )

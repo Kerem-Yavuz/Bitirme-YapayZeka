@@ -549,8 +549,9 @@ class VectorIndex:
                 "vectors_count": info.vectors_count,
                 "status": str(info.status),
             }
-        except Exception:
-            return {"points_count": 0, "vectors_count": 0, "status": "not_found"}
+        except Exception as e:
+            logger.error(f"get_collection_info failed: {e}")
+            return {"points_count": 0, "vectors_count": 0, "status": f"error: {e}"}
 
 
 # ========================= ASYNC LLM CLIENT =========================

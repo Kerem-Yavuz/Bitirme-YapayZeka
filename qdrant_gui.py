@@ -32,9 +32,9 @@ except ImportError as e:
 try:
     from router import route_and_answer, get_router
     ROUTER_AVAILABLE = True
-except ImportError:
+except Exception as e:
     ROUTER_AVAILABLE = False
-    logging.warning("Semantic router not available — falling back to direct LLM")
+    logging.warning(f"Semantic router not available ({type(e).__name__}: {e}) — falling back to direct LLM")
 
 try:
     from tool_calling import check_quota
