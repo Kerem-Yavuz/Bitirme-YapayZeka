@@ -1,0 +1,17 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.env
+.ipynb_checkpoints
+data/
+models/
+venv/
+.vscode/
+.idea/
+README.md
+setup.sh
+*.html
+!rag_gui.html

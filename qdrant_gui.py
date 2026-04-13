@@ -78,13 +78,18 @@ def api_ask():
         data = request.json
         question = data.get('question')
         top_k = data.get('top_k', config.TOP_K)
+        external_context = data.get('external_context')
 
         if not question:
             return jsonify({'error': 'Question is required'}), 400
 
         # Use semantic router if available (automatic easy/hard/reject)
         if ROUTER_AVAILABLE:
-            result = asyncio.run(route_and_answer(question, verbose=True))
+            result = asyncio.run(route_and_answer(
+                question, 
+                external_context=external_context, 
+                verbose=True
+            ))
             return jsonify(result)
         else:
             # Fallback: direct RAG pipeline

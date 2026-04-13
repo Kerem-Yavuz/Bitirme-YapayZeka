@@ -239,7 +239,11 @@ def get_rag_context(query: str, top_k: int = 5) -> str:
 
 # ========================= MAIN ROUTING LOGIC =========================
 
-async def route_and_answer(query: str, verbose: bool = True) -> Dict[str, Any]:
+async def route_and_answer(
+    query: str, 
+    external_context: str = None, 
+    verbose: bool = True
+) -> Dict[str, Any]:
     """
     Route a query and get answer from the appropriate LLM.
     Routing is automatic and invisible to the user.
@@ -288,10 +292,15 @@ async def route_and_answer(query: str, verbose: bool = True) -> Dict[str, Any]:
     system_prompt = (
         "Sen bir üniversite ders seçim asistanısın. Verilen BAĞLAM'ı kullanarak "
         "öğrencinin sorusunu yanıtla. Kaynaklarını belirt. "
+        "Tüm cevaplarını %100 Türkçe olarak ver. "
         "BAĞLAM yetersizse bunu söyle ve genel bilgini ekle. "
         "Sadece ders seçimi ve akademik konularda yardımcı ol."
     )
-    user_prompt = f"Soru: {query}\n\nBAĞLAM:\n{context}\n\nCevap:"
+    
+    user_prompt = f"Soru: {query}\n\nBAĞLAM:\n{context}"
+    if external_context:
+        user_prompt += f"\n\nEK BİLGİLER (Öğrenci Profili/Kontenjan):\n{external_context}"
+    user_prompt += "\n\nCevap:"
 
     # Step 6: Call LLM
     llm_start = time.time()
