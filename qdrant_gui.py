@@ -85,12 +85,34 @@ def api_ask():
 
         # Use semantic router if available (automatic easy/hard/reject)
         if ROUTER_AVAILABLE:
-            result = asyncio.run(route_and_answer(
-                question, 
-                external_context=external_context, 
-                verbose=True
-            ))
-            return jsonify(result)
+            from router import route_and_answer_stream
+            
+            def generate():
+                # route_and_answer_stream bir jeneratördür
+                # asyncio.run_coroutine_threadsafe veya wrapper gerekebilir 
+                # çünkü Flask thread-based ama router async.
+                
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                gen = route_and_answer_stream(
+                    question, 
+                    external_context=external_context, 
+                    verbose=True
+                )
+                
+                try:
+                    while True:
+                        try:
+                            chunk = loop.run_until_complete(gen.__anext__())
+                            yield chunk
+                        except StopAsyncIteration:
+                            break
+                finally:
+                    loop.close()
+
+            from flask import Response
+            return Response(generate(), mimetype='text/event-stream')
         else:
             # Fallback: direct RAG pipeline
             try:
