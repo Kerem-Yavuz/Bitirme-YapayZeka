@@ -1,8 +1,8 @@
 # Ders Seçim Chatbot — Dependencies
-# Core
-flask>=3.0
-flask-cors>=4.0
-gunicorn>=21.2
+# Core (FastAPI)
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pydantic>=2.0
 
 # RAG / Embeddings
 sentence-transformers>=2.2

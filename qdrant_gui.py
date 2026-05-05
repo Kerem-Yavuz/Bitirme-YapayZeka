@@ -1,29 +1,46 @@
 #!/usr/bin/env python3
 """
-Ders Seçim Chatbot — Flask API Server
+Ders Seçim Chatbot — FastAPI Server
 
 REST API endpoints for the course selection chatbot.
 All data stored in Qdrant. Semantic routing is automatic.
+Native async streaming — tokens flow to the client in real time.
 
 Usage:
     python qdrant_gui.py
-    # Production: gunicorn -w 4 -b 0.0.0.0:5000 qdrant_gui:app
+    # Production: uvicorn qdrant_gui:app --host 0.0.0.0 --port 5000 --workers 4
 """
 
-from flask import Flask, request, jsonify, send_file
-from flask_cors import CORS
 import sys
-import asyncio
 import time
 import logging
 import secrets
 import os
+from pathlib import Path
+from typing import Optional
 
-# Admin key for destructive operations (set RESET_API_KEY in .env)
-RESET_API_KEY = os.getenv("RESET_API_KEY", "")
+from fastapi import FastAPI, Request, Header, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
+from pydantic import BaseModel
 
 from config import config, load_config_from_qdrant, save_config_to_qdrant
 
+# ── Pydantic request models ──────────────────────────────────────────
+class AskRequest(BaseModel):
+    question: str
+    top_k: int = config.TOP_K
+    external_context: Optional[str] = None
+
+class SearchRequest(BaseModel):
+    query: str
+    top_k: int = config.TOP_K
+
+class IngestRequest(BaseModel):
+    folder: str
+    force: bool = False
+
+# ── Imports ───────────────────────────────────────────────────────────
 try:
     from rag_qdrant import (
         VectorIndex,
@@ -39,236 +56,178 @@ try:
     ROUTER_AVAILABLE = True
 except Exception as e:
     ROUTER_AVAILABLE = False
-    logging.warning(f"Semantic router not available (Error: {e}) — falling back to direct LLM streaming")
+    logging.warning(
+        f"Semantic router not available (Error: {e}) "
+        "— falling back to direct LLM streaming"
+    )
 
-app = Flask(__name__)
-CORS(app)
+# ── Admin key ─────────────────────────────────────────────────────────
+RESET_API_KEY = os.getenv("RESET_API_KEY", "")
 
-# Global index instance
-index_instance = None
+# ── App ───────────────────────────────────────────────────────────────
+app = FastAPI(
+    title="Ders Seçim Chatbot API",
+    description="RAG-based course selection assistant. All data in Qdrant.",
+    version="2.0.0",
+)
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ── Global state ──────────────────────────────────────────────────────
+index_instance: Optional[VectorIndex] = None
 logger = logging.getLogger(__name__)
 
 
 def get_index() -> VectorIndex:
     """Get or create the vector index (connects to Qdrant)."""
     global index_instance
-
     if index_instance is None:
         index_instance = VectorIndex()
         index_instance.ensure_ready()
         logger.info("VectorIndex initialized, connected to Qdrant")
-
     return index_instance
 
 
 # ========================= ENDPOINTS =========================
 
-@app.route('/')
-def home():
+@app.get("/")
+async def home():
     """Serve the GUI."""
-    return send_file('rag_gui.html')
+    gui_path = Path(__file__).parent / "rag_gui.html"
+    if gui_path.exists():
+        return FileResponse(str(gui_path), media_type="text/html")
+    return JSONResponse({"error": "GUI file not found"}, status_code=404)
 
 
-@app.route('/api/ask', methods=['POST'])
-def api_ask():
+@app.post("/api/ask")
+async def api_ask(body: AskRequest):
     """
     Answer a question — routing is automatic.
     If semantic router is available, it decides easy/hard/reject.
     Otherwise falls back to direct RAG pipeline.
 
-    Request: {"question": "...", "top_k": 5}
+    Real-time streaming: tokens are sent as they are generated.
     """
-    try:
-        data = request.json
-        question = data.get('question')
-        top_k = data.get('top_k', config.TOP_K)
-        external_context = data.get('external_context')
+    if ROUTER_AVAILABLE:
+        from router import route_and_answer_stream
 
-        if not question:
-            return jsonify({'error': 'Question is required'}), 400
+        async def generate():
+            async for chunk in route_and_answer_stream(
+                body.question, external_context=body.external_context
+            ):
+                yield chunk
 
-        # Use semantic router if available (automatic easy/hard/reject)
-        if ROUTER_AVAILABLE:
-            from router import route_and_answer_stream
-
-            def generate():
-                # Flask sync generator + async: her request kendi izole
-                # event loop'unda tüm chunk'ları toplar, sonra yield eder.
-                # set_event_loop() global state'i kirletmez.
-                async def _collect():
-                    chunks = []
-                    async for chunk in route_and_answer_stream(
-                        question, external_context=external_context
-                    ):
-                        chunks.append(chunk)
-                    return chunks
-
-                loop = asyncio.new_event_loop()
-                try:
-                    chunks = loop.run_until_complete(_collect())
-                finally:
-                    loop.close()
-
-                for chunk in chunks:
-                    yield chunk
-
-            from flask import Response
-            return Response(generate(), mimetype='text/event-stream')
-        else:
-            # Fallback: direct RAG pipeline with STREAMING
-            from rag_qdrant import answer_query_stream
-            try:
-                index = get_index()
-            except Exception as e:
-                return jsonify({
-                    'error': 'Index not available.',
-                    'details': str(e)
-                }), 404
-
-            def generate_fallback():
-                async def _collect():
-                    chunks = []
-                    async for chunk in answer_query_stream(
-                        question, index, top_k=top_k
-                    ):
-                        chunks.append(chunk)
-                    return chunks
-
-                loop = asyncio.new_event_loop()
-                try:
-                    chunks = loop.run_until_complete(_collect())
-                finally:
-                    loop.close()
-
-                for chunk in chunks:
-                    yield chunk
-
-            from flask import Response
-            return Response(generate_fallback(), mimetype='text/event-stream')
-
-    except Exception as e:
-        app.logger.error(f"Error in ask endpoint: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/search', methods=['POST'])
-def api_search():
-    """
-    Search for relevant chunks without LLM.
-
-    Request: {"query": "...", "top_k": 5}
-    """
-    try:
-        data = request.json
-        query = data.get('query')
-        top_k = data.get('top_k', config.TOP_K)
-
-        if not query:
-            return jsonify({'error': 'Query is required'}), 400
+        return StreamingResponse(generate(), media_type="text/event-stream")
+    else:
+        # Fallback: direct RAG pipeline with STREAMING
+        from rag_qdrant import answer_query_stream
 
         try:
             index = get_index()
         except Exception as e:
-            return jsonify({
-                'error': 'Index not available.',
-                'details': str(e)
-            }), 404
+            raise HTTPException(
+                status_code=404,
+                detail=f"Index not available: {e}"
+            )
 
-        results = index.search(query, top_k=top_k)
+        async def generate_fallback():
+            async for chunk in answer_query_stream(
+                body.question, index, top_k=body.top_k
+            ):
+                yield chunk
 
-        return jsonify({
-            'query': query,
-            'results': [
-                {
-                    'rank': r.rank,
-                    'similarity': r.similarity,
-                    'doc_id': r.chunk.doc_id,
-                    'source': r.chunk.source,
-                    'text': r.chunk.text
-                }
-                for r in results
-            ]
-        })
-
-    except Exception as e:
-        app.logger.error(f"Error in search endpoint: {e}")
-        return jsonify({'error': str(e)}), 500
+        return StreamingResponse(generate_fallback(), media_type="text/event-stream")
 
 
-@app.route('/api/ingest', methods=['POST'])
-def api_ingest():
-    """
-    Ingest documents from a folder into Qdrant.
-
-    Request: {"folder": "./data", "force": false}
-    """
+@app.post("/api/search")
+async def api_search(body: SearchRequest):
+    """Search for relevant chunks without LLM."""
     try:
-        data = request.json
-        folder = data.get('folder')
-        force = data.get('force', False)
-
-        if not folder:
-            return jsonify({'error': 'Folder path is required'}), 400
-
-        from pathlib import Path
-        folder_path = Path(folder)
-        if not folder_path.exists():
-            return jsonify({'error': f'Folder not found: {folder}'}), 404
-
-        start_time = time.time()
-        index = ingest_documents(folder_path, force_rebuild=force, show_progress=False)
-        elapsed = time.time() - start_time
-
-        # Update global index
-        global index_instance
-        index_instance = index
-
-        return jsonify({
-            'success': True,
-            'total_chunks': len(index.chunks),
-            'total_files': len(set(c.source for c in index.chunks)),
-            'elapsed_time': elapsed,
-            'storage': 'Qdrant'
-        })
-
+        index = get_index()
     except Exception as e:
-        app.logger.error(f"Error in ingest endpoint: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        raise HTTPException(
+            status_code=404,
+            detail=f"Index not available: {e}"
+        )
+
+    results = index.search(body.query, top_k=body.top_k)
+
+    return {
+        "query": body.query,
+        "results": [
+            {
+                "rank": r.rank,
+                "similarity": r.similarity,
+                "doc_id": r.chunk.doc_id,
+                "source": r.chunk.source,
+                "text": r.chunk.text,
+            }
+            for r in results
+        ],
+    }
 
 
-@app.route('/api/info', methods=['GET'])
-def api_info():
+@app.post("/api/ingest")
+async def api_ingest(body: IngestRequest):
+    """Ingest documents from a folder into Qdrant."""
+    folder_path = Path(body.folder)
+    if not folder_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Folder not found: {body.folder}"
+        )
+
+    start_time = time.time()
+    index = ingest_documents(folder_path, force_rebuild=body.force, show_progress=False)
+    elapsed = time.time() - start_time
+
+    global index_instance
+    index_instance = index
+
+    return {
+        "success": True,
+        "total_chunks": len(index.chunks),
+        "total_files": len(set(c.source for c in index.chunks)),
+        "elapsed_time": elapsed,
+        "storage": "Qdrant",
+    }
+
+
+@app.get("/api/info")
+async def api_info():
     """Get index information from Qdrant."""
     try:
         index = get_index()
-        info = index.get_collection_info()
-
-        return jsonify({
-            'collection': config.QDRANT_COLLECTION,
-            'qdrant_url': config.QDRANT_URL,
-            'points_count': info['points_count'],
-            'vectors_count': info['vectors_count'],
-            'status': info['status'],
-            'config': {
-                'embed_model': config.EMBED_MODEL,
-                'chunk_size': config.CHUNK_SIZE,
-                'chunk_overlap': config.CHUNK_OVERLAP,
-                'device': config.EMBED_DEVICE,
-                'llama_cpp_url': config.LLAMA_CPP_URL,
-            },
-            'cache_stats': index.cache.stats(),
-        })
-
     except Exception as e:
-        app.logger.error(f"Error in info endpoint: {e}")
-        return jsonify({'error': str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
+
+    info = index.get_collection_info()
+
+    return {
+        "collection": config.QDRANT_COLLECTION,
+        "qdrant_url": config.QDRANT_URL,
+        "points_count": info["points_count"],
+        "vectors_count": info["vectors_count"],
+        "status": info["status"],
+        "config": {
+            "embed_model": config.EMBED_MODEL,
+            "chunk_size": config.CHUNK_SIZE,
+            "chunk_overlap": config.CHUNK_OVERLAP,
+            "device": config.EMBED_DEVICE,
+            "llama_cpp_url": config.LLAMA_CPP_URL,
+        },
+        "cache_stats": index.cache.stats(),
+    }
 
 
-@app.route('/api/health', methods=['GET'])
-def health():
+@app.get("/api/health")
+async def health():
     """Health check — reports status of all 3 Qdrant collections."""
     from qdrant_client import QdrantClient
 
@@ -280,81 +239,90 @@ def health():
         existing = [c.name for c in client.get_collections().collections]
         qdrant_available = True
 
-        for coll in [config.QDRANT_COLLECTION, config.QDRANT_CONFIG_COLLECTION,
-                     config.QDRANT_CACHE_COLLECTION]:
+        for coll in [
+            config.QDRANT_COLLECTION,
+            config.QDRANT_CONFIG_COLLECTION,
+            config.QDRANT_CACHE_COLLECTION,
+        ]:
             collections_status[coll] = coll in existing
 
     except Exception as e:
         logger.warning(f"Qdrant health check failed: {e}")
 
-    return jsonify({
-        'status': 'healthy' if qdrant_available else 'degraded',
-        'qdrant_available': qdrant_available,
-        'collections': collections_status,
-        'router_available': ROUTER_AVAILABLE,
-        'storage': 'Qdrant (all data)',
-    })
+    return {
+        "status": "healthy" if qdrant_available else "degraded",
+        "qdrant_available": qdrant_available,
+        "collections": collections_status,
+        "router_available": ROUTER_AVAILABLE,
+        "storage": "Qdrant (all data)",
+    }
 
 
-@app.route('/api/qdrant/reset', methods=['POST'])
-def reset_qdrant():
+@app.post("/api/qdrant/reset")
+async def reset_qdrant(request: Request, x_reset_key: Optional[str] = Header(None)):
     """Delete Qdrant collections and start fresh. Requires admin API key."""
-    # --- Admin auth guard ---
+    # ── Admin auth guard ──
     if RESET_API_KEY:
-        provided_key = request.headers.get("X-Reset-Key", "")
-        if not secrets.compare_digest(provided_key, RESET_API_KEY):
-            logger.warning("Unauthorized reset attempt from %s", request.remote_addr)
-            return jsonify({"error": "Unauthorized: geçerli X-Reset-Key header'ı gerekli"}), 401
+        if not x_reset_key or not secrets.compare_digest(x_reset_key, RESET_API_KEY):
+            logger.warning(
+                "Unauthorized reset attempt from %s", request.client.host
+            )
+            raise HTTPException(
+                status_code=401,
+                detail="Unauthorized: geçerli X-Reset-Key header'ı gerekli",
+            )
     else:
         logger.warning(
             "RESET_API_KEY not set — /api/qdrant/reset is UNPROTECTED. "
             "Set RESET_API_KEY in .env to secure this endpoint."
         )
-    # --- End auth guard ---
-    try:
-        from qdrant_client import QdrantClient
-        client = QdrantClient(url=config.QDRANT_URL)
+    # ── End auth guard ──
 
-        deleted = []
-        for coll in [config.QDRANT_COLLECTION, config.QDRANT_CONFIG_COLLECTION,
-                     config.QDRANT_CACHE_COLLECTION]:
-            try:
-                client.delete_collection(coll)
-                deleted.append(coll)
-            except Exception:
-                pass
+    from qdrant_client import QdrantClient
 
-        # Reset global index
-        global index_instance
-        index_instance = None
+    client = QdrantClient(url=config.QDRANT_URL)
 
-        return jsonify({
-            'success': True,
-            'deleted_collections': deleted,
-            'message': 'All Qdrant collections deleted'
-        })
+    deleted = []
+    for coll in [
+        config.QDRANT_COLLECTION,
+        config.QDRANT_CONFIG_COLLECTION,
+        config.QDRANT_CACHE_COLLECTION,
+    ]:
+        try:
+            client.delete_collection(coll)
+            deleted.append(coll)
+        except Exception:
+            pass
 
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    global index_instance
+    index_instance = None
+
+    return {
+        "success": True,
+        "deleted_collections": deleted,
+        "message": "All Qdrant collections deleted",
+    }
 
 
 # ========================= MAIN =========================
 
-if __name__ == '__main__':
+if __name__ == "__main__":
+    import uvicorn
     import argparse
 
-    parser = argparse.ArgumentParser(description='Ders Seçim Chatbot — API Server')
-    parser.add_argument('--host', default='0.0.0.0')
-    parser.add_argument('--port', type=int, default=5000)
-    parser.add_argument('--debug', action='store_true')
+    parser = argparse.ArgumentParser(description="Ders Seçim Chatbot — API Server")
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=5000)
+    parser.add_argument("--reload", action="store_true", help="Enable auto-reload for development")
 
     args = parser.parse_args()
 
     print(f"""
 ╔═══════════════════════════════════════════════════════════╗
-║          Ders Seçim Chatbot — API Server                  ║
+║        Ders Seçim Chatbot — FastAPI Server                ║
 ╠═══════════════════════════════════════════════════════════╣
 ║  Server:     http://{args.host}:{args.port}                          ║
+║  Docs:       http://{args.host}:{args.port}/docs                     ║
 ║  Qdrant:     {config.QDRANT_URL:<43}║
 ║  LLM:        {config.LLAMA_CPP_URL:<43}║
 ║  Router:     {'✓ Active' if ROUTER_AVAILABLE else '✗ Disabled':<43}║
@@ -362,7 +330,7 @@ if __name__ == '__main__':
 ║  Storage:    Qdrant (all data — zero local files)         ║
 ╠═══════════════════════════════════════════════════════════╣
 ║  Endpoints:                                               ║
-║    POST /api/ask     — Ask (auto-routed easy/hard/reject)║
+║    POST /api/ask     — Ask (auto-routed, real-time stream)║
 ║    POST /api/search  — Search chunks (no LLM)            ║
 ║    POST /api/ingest  — Ingest documents                  ║
 ║    GET  /api/info    — Collection info                   ║
@@ -371,4 +339,10 @@ if __name__ == '__main__':
 ╚═══════════════════════════════════════════════════════════╝
     """)
 
-    app.run(host=args.host, port=args.port, debug=args.debug)
+    uvicorn.run(
+        "qdrant_gui:app",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+        timeout_keep_alive=300,
+    )

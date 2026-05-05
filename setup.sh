@@ -1,10 +1,10 @@
 #!/bin/bash
-# Setup script for Mini RAG GUI with Qdrant
+# Setup script for Ders Seçim Chatbot with Qdrant
 
 set -e
 
 echo "╔═══════════════════════════════════════════════════════════╗"
-echo "║         Mini RAG System - Setup Script                   ║"
+echo "║       Ders Seçim Chatbot — Setup Script                   ║"
 echo "╚═══════════════════════════════════════════════════════════╝"
 echo ""
 
@@ -25,7 +25,7 @@ else
 fi
 
 # Check if Qdrant is running
-QDRANT_URL="${QDRANT_URL:-http://172.18.2.251:30986}"
+QDRANT_URL="${QDRANT_URL:-http://localhost:6333}"
 echo -n "Checking Qdrant at $QDRANT_URL... "
 if curl -s --connect-timeout 5 "$QDRANT_URL" &> /dev/null; then
     echo -e "${GREEN}✓${NC} Qdrant is running"
@@ -36,7 +36,7 @@ else
 fi
 
 # Check llama.cpp server
-LLAMA_CPP_URL="${LLAMA_CPP_URL:-http://yapayzeka.pve.izu.edu.tr}"
+LLAMA_CPP_URL="${LLAMA_CPP_URL:-http://localhost:8080}"
 echo -n "Checking llama.cpp server at $LLAMA_CPP_URL... "
 if curl -s --connect-timeout 5 "$LLAMA_CPP_URL/health" &> /dev/null; then
     echo -e "${GREEN}✓${NC} llama.cpp server is running"
@@ -51,7 +51,7 @@ fi
 
 # Install Python dependencies
 echo -n "Installing Python dependencies... "
-if pip3 install -q -r requirements_gui.txt 2>/dev/null; then
+if pip3 install -q -r requirements.txt 2>/dev/null; then
     echo -e "${GREEN}✓${NC} Dependencies installed"
 else
     echo -e "${YELLOW}!${NC} Some dependencies may need manual installation"
@@ -76,15 +76,16 @@ echo ""
 echo "Next steps:"
 echo ""
 echo "1. Start the server:"
-echo "   ${GREEN}python3 rag_server_qdrant.py${NC}"
+echo "   python3 qdrant_gui.py"
 echo ""
 echo "2. Open your browser:"
-echo "   ${GREEN}http://localhost:5000${NC}"
+echo "   http://localhost:5000"
 echo ""
-echo "3. Ingest your documents:"
-echo "   - Go to 'Ingest Documents' tab"
-echo "   - Enter folder path: ${GREEN}./data${NC}"
-echo "   - Click 'Start Ingestion'"
+echo "3. Interactive API docs:"
+echo "   http://localhost:5000/docs"
 echo ""
-echo \"Useful URLs:\"\necho \"  • GUI:          http://localhost:5000\"\necho \"  • Qdrant:       http://172.18.2.251:30986/\"\necho \"  • API Health:   http://localhost:5000/api/health\"
+echo "4. Ingest your documents:"
+echo "   curl -X POST http://localhost:5000/api/ingest \\"
+echo "     -H 'Content-Type: application/json' \\"
+echo "     -d '{\"folder\": \"./data\"}'"
 echo ""

@@ -26,6 +26,6 @@ ENV PORT=5000
 
 EXPOSE 5000
 
-# Start with gunicorn
-# Increased timeout due to LLM processing times
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--timeout", "300", "qdrant_gui:app"]
+# Start with uvicorn (ASGI)
+# --timeout-keep-alive matches LLM processing times
+CMD ["uvicorn", "qdrant_gui:app", "--host", "0.0.0.0", "--port", "5000", "--workers", "4", "--timeout-keep-alive", "300"]

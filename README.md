@@ -5,24 +5,25 @@
 ## Mimari
 
 ```
-Kullanıcı → Flask API → Semantic Router → Easy/Hard LLM
-                              ↓
-                     RAG Engine (Qdrant)
-                     ├── ders_docs_v2      (doküman vektörleri)
-                     ├── _embedding_cache   (embedding önbelleği)
-                     └── _system_config     (sistem ayarları)
+Kullanıcı → FastAPI Server → Semantic Router → Easy/Hard LLM
+                                    ↓
+                           RAG Engine (Qdrant)
+                           ├── ders_docs_v2      (doküman vektörleri)
+                           ├── _embedding_cache   (embedding önbelleği)
+                           └── _system_config     (sistem ayarları)
 ```
 
 **Temel Prensipler:**
 - **Zero local file dependency** — tüm veri Qdrant'ta
 - **Semantic routing** — sorular otomatik olarak Easy LLM (basit) / Hard LLM (karmaşık) / Reject'e yönlenir
+- **Gerçek zamanlı streaming** — LLM'den gelen tokenlar anında istemciye iletilir
 - **Incremental ingest** — yalnızca değişen dokümanlar yeniden işlenir
 
 ## Teknolojiler
 
 | Bileşen | Teknoloji |
 |---------|-----------|
-| API Server | Flask + Gunicorn |
+| API Server | **FastAPI** + Uvicorn (ASGI) |
 | Vektör DB | Qdrant |
 | Embedding | sentence-transformers/all-MiniLM-L6-v2 |
 | LLM | llama.cpp (OpenAI-compatible API) |
@@ -64,12 +65,18 @@ curl -X POST http://localhost:5000/api/ingest \
 ### 5. Sunucuyu başlat
 
 ```bash
-# Development
-python qdrant_gui.py --debug
+# Development (auto-reload)
+python qdrant_gui.py --reload
 
 # Production
-gunicorn -w 4 -b 0.0.0.0:5000 --timeout 300 qdrant_gui:app
+uvicorn qdrant_gui:app --host 0.0.0.0 --port 5000 --workers 4 --timeout-keep-alive 300
 ```
+
+### 6. API Dokümantasyonu
+
+Sunucu başlatıldıktan sonra otomatik Swagger arayüzü:
+- **Swagger UI:** http://localhost:5000/docs
+- **ReDoc:** http://localhost:5000/redoc
 
 ## Docker
 
@@ -82,12 +89,13 @@ docker compose up --build
 | Endpoint | Metod | Açıklama |
 |----------|-------|----------|
 | `/` | GET | Web GUI |
-| `/api/ask` | POST | Soru sor (otomatik routing) |
+| `/api/ask` | POST | Soru sor (otomatik routing, gerçek zamanlı streaming) |
 | `/api/search` | POST | Vektör arama (LLM'siz) |
 | `/api/ingest` | POST | Doküman ingest |
 | `/api/info` | GET | Collection bilgisi |
 | `/api/health` | GET | Sağlık kontrolü |
 | `/api/qdrant/reset` | POST | Collection sıfırla (🔒 admin key gerekli) |
+| `/docs` | GET | Swagger UI (otomatik) |
 
 ### Örnek: Soru Sorma
 
@@ -132,9 +140,9 @@ python router.py ask "Hangi seçmeli dersleri almalıyım?"
 ## Proje Yapısı
 
 ```
+├── qdrant_gui.py      # FastAPI server: async endpoints, real-time streaming
 ├── rag_qdrant.py      # RAG engine: chunking, embedding, arama, LLM
 ├── router.py          # Semantic router: easy/hard/reject yönlendirme
-├── qdrant_gui.py      # Flask API server
 ├── config.py          # Merkezi konfigürasyon
 ├── rag_gui.html       # Web GUI (tek dosya)
 ├── requirements.txt   # Python bağımlılıkları
