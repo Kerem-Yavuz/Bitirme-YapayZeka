@@ -47,23 +47,21 @@ try:
     import nltk
     from nltk.tokenize import sent_tokenize
     NLTK_AVAILABLE = True
+    # Wrap in a general exception block to catch BadZipFile or other data corruption errors
     try:
-        nltk.data.find('tokenizers/punkt_tab')
-    except LookupError:
         try:
+            nltk.data.find('tokenizers/punkt_tab')
+        except (LookupError, Exception):
             nltk.download('punkt_tab', quiet=True)
-        except Exception:
-            pass
-    try:
-        nltk.data.find('tokenizers/punkt')
-    except LookupError:
+            
         try:
+            nltk.data.find('tokenizers/punkt')
+        except (LookupError, Exception):
             nltk.download('punkt', quiet=True)
-        except Exception:
-            pass
-    try:
+            
         sent_tokenize("Test sentence.")
-    except Exception:
+    except Exception as e:
+        print(f"NLTK initialization failed (falling back to simple chunking): {e}")
         NLTK_AVAILABLE = False
 except ImportError:
     NLTK_AVAILABLE = False

@@ -97,8 +97,7 @@ def api_ask():
                 
                 gen = route_and_answer_stream(
                     question, 
-                    external_context=external_context, 
-                    verbose=True
+                    external_context=external_context
                 )
                 
                 try:

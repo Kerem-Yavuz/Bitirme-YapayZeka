@@ -173,6 +173,7 @@ async def route_and_answer_stream(query: str, external_context: str = None):
     router = get_router()
     route_result = router(query)
     route_name = route_result.name if route_result else None
+    logger.info(f"Query: {query} | Route: {route_name}")
 
     if route_name is None:
         yield json.dumps({"answer": REJECT_MESSAGE, "status": "done"}) + "\n"
