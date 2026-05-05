@@ -632,6 +632,46 @@ class AsyncLlamaCppClient:
             logger.error(f"llama.cpp chat error: {e}")
             raise
 
+    async def chat_stream(self, system: str, user: str):
+        """Stream chat response using OpenAI-compatible API."""
+        model = await self.get_model()
+
+        payload = {
+            'model': model,
+            'messages': [
+                {'role': 'system', 'content': system},
+                {'role': 'user', 'content': user}
+            ],
+            'temperature': config.LLAMA_CPP_TEMPERATURE,
+            'max_tokens': config.LLAMA_CPP_MAX_TOKENS,
+            'stream': True
+        }
+
+        try:
+            async with self.session.post(
+                f"{self.base_url}/v1/chat/completions",
+                json=payload,
+                headers={'Content-Type': 'application/json'}
+            ) as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    raise RuntimeError(f"llama.cpp API error: {resp.status} - {error_text}")
+
+                async for line in resp.content:
+                    if line:
+                        decoded_line = line.decode('utf-8').strip()
+                        if decoded_line.startswith("data: "):
+                            data_str = decoded_line[6:]
+                            if data_str == "[DONE]": break
+                            try:
+                                data = json.loads(data_str)
+                                token = data["choices"][0]["delta"].get("content", "")
+                                if token: yield token
+                            except: continue
+        except Exception as e:
+            logger.error(f"llama.cpp chat stream error: {e}")
+            raise
+
 
 # ========================= RAG PIPELINE =========================
 
@@ -749,6 +789,39 @@ async def answer_query_async(
         },
         'best_similarity': results[0].similarity if results else 0.0
     }
+
+
+async def answer_query_stream(
+    query: str,
+    index: VectorIndex,
+    top_k: int = config.TOP_K,
+    llm_url: str = None,
+):
+    """Answer query using RAG pipeline (streaming)."""
+    search_start = time.time()
+    results = index.search(query, top_k=top_k)
+    search_time = time.time() - search_start
+
+    use_rag = len(results) > 0 and results[0].similarity >= config.SIM_THRESHOLD
+
+    if use_rag:
+        context = build_context(results)
+        system_prompt = SYSTEM_PROMPT_RAG
+        user_prompt = f"Soru: {query}\n\nBAĞLAM:\n{context}\n\nCevap:"
+    else:
+        system_prompt = SYSTEM_PROMPT_FALLBACK
+        user_prompt = f"Soru: {query}\n\nBAĞLAM:\n(boş)\n\nCevap:"
+
+    base_url = llm_url or config.LLAMA_CPP_URL
+
+    async with AsyncLlamaCppClient(base_url=base_url) as client:
+        server_available = await client.ensure_model()
+        if not server_available:
+            yield json.dumps({"answer": "LLM sunucusuna bağlanılamıyor."}) + "\n"
+            return
+
+        async for token in client.chat_stream(system_prompt, user_prompt):
+            yield json.dumps({"answer": token}) + "\n"
 
 
 # ========================= INGEST =========================

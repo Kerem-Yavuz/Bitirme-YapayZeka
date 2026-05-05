@@ -32,9 +32,9 @@ except ImportError as e:
 try:
     from router import route_and_answer, get_router
     ROUTER_AVAILABLE = True
-except ImportError:
+except Exception as e:
     ROUTER_AVAILABLE = False
-    logging.warning("Semantic router not available — falling back to direct LLM")
+    logging.warning(f"Semantic router not available (Error: {e}) — falling back to direct LLM streaming")
 
 app = Flask(__name__)
 CORS(app)
@@ -113,19 +113,32 @@ def api_ask():
             from flask import Response
             return Response(generate(), mimetype='text/event-stream')
         else:
-            # Fallback: direct RAG pipeline
+            # Fallback: direct RAG pipeline with STREAMING
+            from rag_qdrant import answer_query_stream
             try:
                 index = get_index()
             except Exception as e:
                 return jsonify({
-                    'error': 'Index not available. Please ingest documents first.',
+                    'error': 'Index not available.',
                     'details': str(e)
                 }), 404
 
-            result = asyncio.run(
-                answer_query_async(question, index, top_k=top_k, verbose=False)
-            )
-            return jsonify(result)
+            def generate_fallback():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                gen = answer_query_stream(question, index, top_k=top_k)
+                try:
+                    while True:
+                        try:
+                            chunk = loop.run_until_complete(gen.__anext__())
+                            yield chunk
+                        except StopAsyncIteration:
+                            break
+                finally:
+                    loop.close()
+
+            from flask import Response
+            return Response(generate_fallback(), mimetype='text/event-stream')
 
     except Exception as e:
         app.logger.error(f"Error in ask endpoint: {e}")

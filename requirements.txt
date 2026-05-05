@@ -23,7 +23,7 @@ tqdm>=4.65
 nltk>=3.8
 
 # Semantic Router
-semantic-router>=0.0.20
+semantic-router>=0.0.48
 
 # Configuration
 python-dotenv>=1.0

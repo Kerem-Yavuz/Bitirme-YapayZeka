@@ -12,13 +12,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Pre-download models and NLTK data for deployment (offline readiness)
+RUN python3 -c "import nltk; nltk.download('punkt'); nltk.download('punkt_tab'); \
+    from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2'); \
+    from semantic_router.encoders import HuggingFaceEncoder; HuggingFaceEncoder(name='sentence-transformers/all-MiniLM-L6-v2')"
+
 # Copy application code
 COPY . .
 
-# Set model cache directory inside /app/models to allow persistence via PVC
-ENV TRANSFORMERS_CACHE=/app/models/transformers
-ENV TORCH_HOME=/app/models/torch
-ENV SENTENCE_TRANSFORMERS_HOME=/app/models/sentence_transformers
+# Environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PORT=5000
 
