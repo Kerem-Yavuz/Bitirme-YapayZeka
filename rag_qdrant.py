@@ -133,8 +133,6 @@ class QdrantEmbeddingCache:
                         size=self.dimension,
                         distance=models.Distance.COSINE,
                     ),
-                    shard_number=1,
-                    replication_factor=2,
                 )
                 logger.info(f"Created cache collection: {self.collection}")
         except Exception as e:
@@ -405,8 +403,6 @@ class VectorIndex:
                     size=self.dimension,
                     distance=models.Distance.COSINE,
                 ),
-                shard_number=1,
-                replication_factor=2,
             )
             logger.info(f"Created collection: {self.collection_name}")
 
@@ -667,7 +663,8 @@ class AsyncLlamaCppClient:
                                 data = json.loads(data_str)
                                 token = data["choices"][0]["delta"].get("content", "")
                                 if token: yield token
-                            except: continue
+                            except (json.JSONDecodeError, KeyError, IndexError):
+                                continue
         except Exception as e:
             logger.error(f"llama.cpp chat stream error: {e}")
             raise
@@ -693,7 +690,8 @@ SYSTEM_PROMPT_FALLBACK = (
 def build_context(results: List[SearchResult],
                   max_tokens: int = config.LLAMA_CPP_MAX_TOKENS) -> str:
     """Build context from search results."""
-    max_chars = (max_tokens * 4) - 2000
+    # Türkçe agglutinative bir dil — token başına ~3 karakter daha güvenli
+    max_chars = (max_tokens * 3) - 2000
 
     context_parts = []
     total_chars = 0

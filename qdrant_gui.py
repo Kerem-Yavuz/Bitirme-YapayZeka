@@ -16,6 +16,11 @@ import sys
 import asyncio
 import time
 import logging
+import secrets
+import os
+
+# Admin key for destructive operations (set RESET_API_KEY in .env)
+RESET_API_KEY = os.getenv("RESET_API_KEY", "")
 
 from config import config, load_config_from_qdrant, save_config_to_qdrant
 
@@ -86,29 +91,27 @@ def api_ask():
         # Use semantic router if available (automatic easy/hard/reject)
         if ROUTER_AVAILABLE:
             from router import route_and_answer_stream
-            
+
             def generate():
-                # route_and_answer_stream bir jeneratördür
-                # asyncio.run_coroutine_threadsafe veya wrapper gerekebilir 
-                # çünkü Flask thread-based ama router async.
-                
+                # Flask sync generator + async: her request kendi izole
+                # event loop'unda tüm chunk'ları toplar, sonra yield eder.
+                # set_event_loop() global state'i kirletmez.
+                async def _collect():
+                    chunks = []
+                    async for chunk in route_and_answer_stream(
+                        question, external_context=external_context
+                    ):
+                        chunks.append(chunk)
+                    return chunks
+
                 loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                
-                gen = route_and_answer_stream(
-                    question, 
-                    external_context=external_context
-                )
-                
                 try:
-                    while True:
-                        try:
-                            chunk = loop.run_until_complete(gen.__anext__())
-                            yield chunk
-                        except StopAsyncIteration:
-                            break
+                    chunks = loop.run_until_complete(_collect())
                 finally:
                     loop.close()
+
+                for chunk in chunks:
+                    yield chunk
 
             from flask import Response
             return Response(generate(), mimetype='text/event-stream')
@@ -124,18 +127,22 @@ def api_ask():
                 }), 404
 
             def generate_fallback():
+                async def _collect():
+                    chunks = []
+                    async for chunk in answer_query_stream(
+                        question, index, top_k=top_k
+                    ):
+                        chunks.append(chunk)
+                    return chunks
+
                 loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                gen = answer_query_stream(question, index, top_k=top_k)
                 try:
-                    while True:
-                        try:
-                            chunk = loop.run_until_complete(gen.__anext__())
-                            yield chunk
-                        except StopAsyncIteration:
-                            break
+                    chunks = loop.run_until_complete(_collect())
                 finally:
                     loop.close()
+
+                for chunk in chunks:
+                    yield chunk
 
             from flask import Response
             return Response(generate_fallback(), mimetype='text/event-stream')
@@ -291,7 +298,19 @@ def health():
 
 @app.route('/api/qdrant/reset', methods=['POST'])
 def reset_qdrant():
-    """Delete Qdrant collections and start fresh."""
+    """Delete Qdrant collections and start fresh. Requires admin API key."""
+    # --- Admin auth guard ---
+    if RESET_API_KEY:
+        provided_key = request.headers.get("X-Reset-Key", "")
+        if not secrets.compare_digest(provided_key, RESET_API_KEY):
+            logger.warning("Unauthorized reset attempt from %s", request.remote_addr)
+            return jsonify({"error": "Unauthorized: geçerli X-Reset-Key header'ı gerekli"}), 401
+    else:
+        logger.warning(
+            "RESET_API_KEY not set — /api/qdrant/reset is UNPROTECTED. "
+            "Set RESET_API_KEY in .env to secure this endpoint."
+        )
+    # --- End auth guard ---
     try:
         from qdrant_client import QdrantClient
         client = QdrantClient(url=config.QDRANT_URL)
@@ -348,7 +367,7 @@ if __name__ == '__main__':
 ║    POST /api/ingest  — Ingest documents                  ║
 ║    GET  /api/info    — Collection info                   ║
 ║    GET  /api/health  — Health check                      ║
-║    POST /api/qdrant/reset — Reset all collections        ║
+║    POST /api/qdrant/reset — Reset all collections (🔒)   ║
 ╚═══════════════════════════════════════════════════════════╝
     """)
 

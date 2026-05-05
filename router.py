@@ -88,6 +88,24 @@ hard_route = Route(
 # ========================= ROUTER SETUP =========================
 
 _router_instance = None
+_index_instance = None
+
+
+def get_rag_index():
+    """Return a module-level VectorIndex singleton.
+
+    The SentenceTransformer model is heavy (~80 MB) and should be loaded
+    only once per process.  Subsequent calls return the cached instance.
+    """
+    global _index_instance
+    if _index_instance is None:
+        from rag_qdrant import VectorIndex
+        logger.info("Initializing VectorIndex singleton in router...")
+        _index_instance = VectorIndex()
+        _index_instance.ensure_ready()
+        logger.info("VectorIndex singleton ready.")
+    return _index_instance
+
 
 def get_router() -> RouteLayer:
     global _router_instance
@@ -123,7 +141,8 @@ async def call_llm_stream(base_url: str, system: str, user: str) -> AsyncGenerat
                             data = json.loads(data_str)
                             token = data["choices"][0]["delta"].get("content", "")
                             if token: yield token
-                        except: continue
+                        except (json.JSONDecodeError, KeyError, IndexError):
+                            continue
 
 async def call_llm(base_url: str, system: str, user: str) -> str:
     """Send chat request to a llama.cpp server and get full response."""
@@ -145,9 +164,8 @@ async def call_llm(base_url: str, system: str, user: str) -> str:
 
 def get_rag_context(query: str, top_k: int = 5) -> str:
     try:
-        from rag_qdrant import VectorIndex, build_context
-        index = VectorIndex()
-        index.ensure_ready()
+        from rag_qdrant import build_context
+        index = get_rag_index()   # singleton — model yüklenmez tekrar
         results = index.search(query, top_k=top_k)
         return build_context(results) if results else "(bağlam bulunamadı)"
     except Exception as e:
