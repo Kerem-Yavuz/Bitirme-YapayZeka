@@ -16,6 +16,8 @@ import time
 import logging
 import secrets
 import os
+import random
+import asyncio
 from pathlib import Path
 from typing import Optional
 
@@ -93,20 +95,25 @@ def get_index() -> VectorIndex:
 # ========================= STARTUP =========================
 @app.on_event("startup")
 async def startup_event():
-    """Initialize singletons on startup to avoid delays on first request."""
-    logger.info("🚀 API Sunucusu başlatılıyor, bileşenler hazırlanıyor...")
+    """Initialize singletons on startup with staggering to avoid OOM."""
+    # Stagger startup to avoid simultaneous memory spikes
+    wait_time = random.uniform(0, 10)
+    logger.info(f"🚀 API Sunucusu hazırlanıyor... (Gecikme: {wait_time:.2f}s)")
+    await asyncio.sleep(wait_time)
+    
     try:
-        # Pre-initialize VectorIndex (loads SentenceTransformer)
-        get_index()
+        # 1. Load RAG Index (loads the main model)
+        from rag_qdrant import get_vector_index
+        get_vector_index()
         
-        # Pre-initialize Semantic Router
+        # 2. Load Router
         if ROUTER_AVAILABLE:
             from router import get_router
             get_router()
             
-        logger.info("✅ Tüm bileşenler başarıyla başlatıldı ve hazır.")
+        logger.info("✅ İşçi (Worker) başarıyla hazırlandı ve hazır.")
     except Exception as e:
-        logger.error(f"❌ Başlatma sırasında hata oluştu: {e}")
+        logger.error(f"❌ Başlatma hatası: {e}")
 
 
 # ========================= ENDPOINTS =========================
@@ -153,7 +160,7 @@ async def api_ask(body: AskRequest):
             )
 
         async def generate_fallback():
-            logger.info("[API-ASK] Fallback mode: calling direct RAG stream.")
+            logger.info("[API-ASK] Router unavailable. FALLBACK: Using HARD route (Direct RAG).")
             async for chunk in answer_query_stream(
                 body.question, index, top_k=body.top_k, external_context=body.external_context
             ):

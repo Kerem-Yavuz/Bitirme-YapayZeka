@@ -12,10 +12,13 @@ from typing import Dict, Any, AsyncGenerator
 from semantic_router import Route, SemanticRouter
 from semantic_router.encoders import HuggingFaceEncoder
 from semantic_router.index.local import LocalIndex
-from semantic_router.encoders.base import BaseEncoder
 
 import aiohttp
 from config import config
+
+# Note: We use HuggingFaceEncoder directly because using multiple workers (e.g., 4) 
+# would trigger the model to be loaded 4 times into memory, causing OOM errors 
+# or unnecessary overhead. Keeping it single-worker/local ensures a single load.
 
 logging.basicConfig(
     level=logging.INFO,
@@ -93,34 +96,30 @@ _router_instance = None
 _index_instance = None
 
 
-class SharedSentenceTransformerEncoder(BaseEncoder):
-    """Custom encoder that uses the singleton model from VectorIndex."""
-    def __init__(self, name: str):
-        super().__init__(name=name)
-        self.model = None
+def get_rag_index():
+    """Return the global VectorIndex singleton."""
+    from rag_qdrant import get_vector_index
+    return get_vector_index()
 
-    def __call__(self, docs: list[str]) -> list[list[float]]:
-        if self.model is None:
-            # Lazy load from our singleton
-            from rag_qdrant import get_vector_index
-            self.model = get_vector_index().model
-        
-        # Use the same embedding logic as our RAG index
-        embeddings = self.model.encode(docs, normalize_embeddings=True)
-        return embeddings.tolist()
 
 def get_router() -> SemanticRouter:
     global _router_instance
     if _router_instance is None:
-        # Step 1: Ensure VectorIndex (and its model) is ready
         from rag_qdrant import get_vector_index
-        index_instance = get_vector_index()
+        index_instance = get_vector_index() # Ensure model is loaded
         
-        logger.info(f"Initializing SemanticRouter using SHARED model from VectorIndex...")
+        logger.info(f"Initializing SemanticRouter (Memory Optimized)...")
         
-        # Use our custom shared encoder
-        encoder = SharedSentenceTransformerEncoder(name=config.EMBED_MODEL)
-        encoder.model = index_instance.model # Inject the already loaded model
+        # Initialize standard encoder
+        encoder = HuggingFaceEncoder(name=config.EMBED_MODEL)
+        
+        # MONKEY-PATCH: Bypass Pydantic validation to force model sharing
+        try:
+            object.__setattr__(encoder, 'model', index_instance.model)
+            logger.info("✅ Router is using the shared model instance (Forced).")
+        except Exception as e:
+            logger.warning(f"Shared model injection failed: {e}")
+
         index = LocalIndex()
         _router_instance = SemanticRouter(
             encoder=encoder, 
@@ -128,23 +127,15 @@ def get_router() -> SemanticRouter:
             index=index
         )
         
-        # FORCE READINESS: Some versions need this check or manual override
-        logger.info("SemanticRouter initialized, waiting for index readiness...")
-        
-        # Wait loop for readiness
-        for attempt in range(10):
-            if _router_instance.index is not None:
-                # Manual override if it's stuck in False but we have routes
-                _router_instance.index.ready = True 
-                break
-            time.sleep(0.5)
-            
-        # Actual warm-up call to trigger internal states
+        # Force populate and ready
         try:
-            _router_instance("Router is ready test")
-            logger.info("✅ SEMANTIC ROUTER ŞU AN HAZIR VE ÇALIŞIYOR!")
+            # This triggers the internal indexing
+            _router_instance("Router warmup") 
+            if _router_instance.index:
+                _router_instance.index.ready = True
+            logger.info("✅ SemanticRouter ready and warmed up!")
         except Exception as e:
-            logger.error(f"❌ ROUTER HALA HAZIR DEĞİL: {e}")
+            logger.warning(f"Router warm-up warning: {e}")
             
     return _router_instance
 

@@ -30,5 +30,5 @@ ENV PORT=5000
 EXPOSE 5000
 
 # Start with uvicorn (ASGI)
-# --timeout-keep-alive matches LLM processing times
-CMD ["uvicorn", "qdrant_gui:app", "--host", "0.0.0.0", "--port", "5000", "--workers", "4", "--timeout-keep-alive", "300"]
+# Use 2 workers to balance concurrency and memory (avoiding OOM)
+CMD ["uvicorn", "qdrant_gui:app", "--host", "0.0.0.0", "--port", "5000", "--workers", "2", "--timeout-keep-alive", "300"]
