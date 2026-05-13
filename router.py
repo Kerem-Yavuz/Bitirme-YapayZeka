@@ -127,15 +127,29 @@ def get_router() -> SemanticRouter:
             index=index
         )
         
-        # Force populate and ready
+        # MANUALLY POPULATE INDEX: This ensures the index is ready immediately
         try:
-            # This triggers the internal indexing
-            _router_instance("Router warmup") 
-            if _router_instance.index:
-                _router_instance.index.ready = True
-            logger.info("✅ SemanticRouter ready and warmed up!")
+            logger.info("Manually indexing routes for SemanticRouter...")
+            all_utterances = []
+            all_route_names = []
+            for r in [easy_route, hard_route]:
+                for u in r.utterances:
+                    all_utterances.append(u)
+                    all_route_names.append(r.name)
+            
+            # Use our encoder to get embeddings for all utterances
+            utterance_embeddings = encoder(all_utterances)
+            
+            # Add to index manually
+            _router_instance.index.add(
+                embeddings=utterance_embeddings, 
+                routes=all_route_names,
+                utterances=all_utterances
+            )
+            _router_instance.index.ready = True
+            logger.info("✅ SemanticRouter index manually built and ready!")
         except Exception as e:
-            logger.warning(f"Router warm-up warning: {e}")
+            logger.warning(f"Manual indexing failed: {e}")
             
     return _router_instance
 
