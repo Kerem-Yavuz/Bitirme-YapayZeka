@@ -100,10 +100,18 @@ def get_rag_index():
 def get_router() -> SemanticRouter:
     global _router_instance
     if _router_instance is None:
-        logger.info(f"Initializing semantic router with {config.EMBED_MODEL}...")
+        logger.info(f"Initializing SemanticRouter with {config.EMBED_MODEL}...")
         encoder = HuggingFaceEncoder(name=config.EMBED_MODEL)
         _router_instance = SemanticRouter(encoder=encoder, routes=[easy_route, hard_route])
-        logger.info("Router ready!")
+        
+        # Warm-up to ensure index is ready
+        try:
+            logger.info("Warming up router...")
+            _router_instance("Merhaba") 
+            logger.info("SemanticRouter ready and warmed up!")
+        except Exception as e:
+            logger.warning(f"Router warm-up failed (might be normal): {e}")
+            
     return _router_instance
 
 # ========================= LLM CLIENTS =========================
@@ -188,10 +196,14 @@ async def route_and_answer_stream(query: str, external_context: str = None):
     start_time = time.time()
     router = get_router()
     route_start = time.time()
-    route_result = router(query)
+    try:
+        route_result = router(query)
+        route_name = route_result.name if route_result else None
+    except Exception as e:
+        logger.error(f"[ROUTER-ERROR] Router failed: {e}. Falling back to 'hard' route.")
+        route_name = "hard"
+        
     route_duration = time.time() - route_start
-    
-    route_name = route_result.name if route_result else None
     logger.info(f"[ROUTER-DEBUG] Query: '{query[:50]}' | Route: {route_name} | Duration: {route_duration:.3f}s")
 
     if route_name is None:
