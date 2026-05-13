@@ -90,6 +90,25 @@ def get_index() -> VectorIndex:
     return get_vector_index()
 
 
+# ========================= STARTUP =========================
+@app.on_event("startup")
+async def startup_event():
+    """Initialize singletons on startup to avoid delays on first request."""
+    logger.info("🚀 API Sunucusu başlatılıyor, bileşenler hazırlanıyor...")
+    try:
+        # Pre-initialize VectorIndex (loads SentenceTransformer)
+        get_index()
+        
+        # Pre-initialize Semantic Router
+        if ROUTER_AVAILABLE:
+            from router import get_router
+            get_router()
+            
+        logger.info("✅ Tüm bileşenler başarıyla başlatıldı ve hazır.")
+    except Exception as e:
+        logger.error(f"❌ Başlatma sırasında hata oluştu: {e}")
+
+
 # ========================= ENDPOINTS =========================
 
 @app.get("/")
@@ -116,7 +135,11 @@ async def api_ask(body: AskRequest):
             ):
                 yield chunk
 
-        return StreamingResponse(generate(), media_type="text/event-stream")
+        return StreamingResponse(
+            generate(), 
+            media_type="text/event-stream",
+            headers={"X-Accel-Buffering": "no"}
+        )
     else:
         # Fallback: direct RAG pipeline with STREAMING
         from rag_qdrant import answer_query_stream
