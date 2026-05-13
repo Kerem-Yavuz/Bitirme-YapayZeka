@@ -8,12 +8,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install
+# Copy requirements and install dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
 
-# Pre-download models and NLTK data for deployment (offline readiness)
-RUN python3 -c "import nltk; nltk.download('punkt'); nltk.download('punkt_tab'); \
+# Pre-download models and NLTK data
+# This layer is cached as long as requirements.txt stays the same
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3 -c "import nltk; nltk.download('punkt', quiet=True); nltk.download('punkt_tab', quiet=True); \
     from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2'); \
     from semantic_router.encoders import HuggingFaceEncoder; HuggingFaceEncoder(name='sentence-transformers/all-MiniLM-L6-v2')"
 

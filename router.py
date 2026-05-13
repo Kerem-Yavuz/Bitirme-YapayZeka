@@ -9,7 +9,7 @@ import logging
 import json
 from typing import Dict, Any, AsyncGenerator
 
-from semantic_router import Route, RouteLayer
+from semantic_router import Route, SemanticRouter
 from semantic_router.encoders import HuggingFaceEncoder
 
 import aiohttp
@@ -92,27 +92,17 @@ _index_instance = None
 
 
 def get_rag_index():
-    """Return a module-level VectorIndex singleton.
-
-    The SentenceTransformer model is heavy (~80 MB) and should be loaded
-    only once per process.  Subsequent calls return the cached instance.
-    """
-    global _index_instance
-    if _index_instance is None:
-        from rag_qdrant import VectorIndex
-        logger.info("Initializing VectorIndex singleton in router...")
-        _index_instance = VectorIndex()
-        _index_instance.ensure_ready()
-        logger.info("VectorIndex singleton ready.")
-    return _index_instance
+    """Return the global VectorIndex singleton."""
+    from rag_qdrant import get_vector_index
+    return get_vector_index()
 
 
-def get_router() -> RouteLayer:
+def get_router() -> SemanticRouter:
     global _router_instance
     if _router_instance is None:
         logger.info(f"Initializing semantic router with {config.EMBED_MODEL}...")
         encoder = HuggingFaceEncoder(name=config.EMBED_MODEL)
-        _router_instance = RouteLayer(encoder=encoder, routes=[easy_route, hard_route])
+        _router_instance = SemanticRouter(encoder=encoder, routes=[easy_route, hard_route])
         logger.info("Router ready!")
     return _router_instance
 
@@ -141,7 +131,8 @@ async def call_llm_stream(base_url: str, system: str, user: str) -> AsyncGenerat
                             data = json.loads(data_str)
                             token = data["choices"][0]["delta"].get("content", "")
                             if token: yield token
-                        except (json.JSONDecodeError, KeyError, IndexError):
+                        except (json.JSONDecodeError, KeyError, IndexError) as e:
+                            logger.debug(f"JSON decode error in stream: {e} (Data: {data_str[:100]})")
                             continue
 
 async def call_llm(base_url: str, system: str, user: str) -> str:
@@ -163,21 +154,28 @@ async def call_llm(base_url: str, system: str, user: str) -> str:
 # ========================= RAG INTEGRATION =========================
 
 def get_rag_context(query: str, top_k: int = 5) -> str:
+    start = time.time()
     try:
         from rag_qdrant import build_context
         index = get_rag_index()   # singleton — model yüklenmez tekrar
+        search_start = time.time()
         results = index.search(query, top_k=top_k)
-        return build_context(results) if results else "(bağlam bulunamadı)"
+        search_duration = time.time() - search_start
+        
+        context = build_context(results) if results else "(bağlam bulunamadı)"
+        logger.info(f"[RAG-DEBUG] Search took {search_duration:.3f}s. Results: {len(results)}. Context length: {len(context)} chars")
+        return context
     except Exception as e:
-        logger.warning(f"RAG context error: {e}")
+        logger.warning(f"[RAG-ERROR] Context error after {time.time()-start:.3f}s: {e}")
         return "(bağlam hatası)"
 
 # ========================= MAIN ROUTING LOGIC =========================
 
 def build_prompts(query: str, context: str, external_context: str = None):
     system = (
-        "Sen bir üniversite ders seçim asistanısın. Verilen BAĞLAM'ı kullanarak "
-        "öğrencinin sorusunu yanıtla. Kaynaklarını belirt. Tüm cevaplarını %100 Türkçe ver. "
+        "Sen bir üniversite ders seçim asistanısın. Verilen BAĞLAM ve EK BİLGİLER'i "
+        "kullanarak öğrencinin sorusunu yanıtla. Kaynaklarını belirt. Tüm cevaplarını %100 Türkçe ver. "
+        "BAĞLAM yetersizse bunu söyle ve EK BİLGİLER (Öğrenci Profili) ile genel bilgini kullan. "
         "Sadece ders seçimi ve akademik konularda yardımcı ol."
     )
     user = f"Soru: {query}\n\nBAĞLAM:\n{context}"
@@ -187,24 +185,40 @@ def build_prompts(query: str, context: str, external_context: str = None):
     return system, user
 
 async def route_and_answer_stream(query: str, external_context: str = None):
-    """Streaming version for API use."""
+    start_time = time.time()
     router = get_router()
+    route_start = time.time()
     route_result = router(query)
+    route_duration = time.time() - route_start
+    
     route_name = route_result.name if route_result else None
-    logger.info(f"Query: {query} | Route: {route_name}")
+    logger.info(f"[ROUTER-DEBUG] Query: '{query[:50]}' | Route: {route_name} | Duration: {route_duration:.3f}s")
 
     if route_name is None:
+        logger.warning(f"[ROUTER-DEBUG] Query rejected by semantic router.")
         yield json.dumps({"answer": REJECT_MESSAGE, "status": "done"}) + "\n"
         return
 
     context = get_rag_context(query)
     llm_url = config.EASY_LLM_URL if route_name == "easy" else config.HARD_LLM_URL
     system, user = build_prompts(query, context, external_context)
+    
+    logger.info(f"[LLM-DEBUG] Calling LLM ({route_name}) at {llm_url}. System prompt length: {len(system)}. User prompt length: {len(user)}")
 
     try:
+        token_count = 0
+        first_token_time = None
         async for token in call_llm_stream(llm_url, system, user):
+            if first_token_time is None:
+                first_token_time = time.time()
+                logger.info(f"[LLM-DEBUG] First token received in {first_token_time - start_time:.3f}s")
+            token_count += 1
             yield json.dumps({"answer": token}) + "\n"
+        
+        total_duration = time.time() - start_time
+        logger.info(f"[LLM-DEBUG] Stream completed. Total tokens: ~{token_count}. Total duration: {total_duration:.3f}s")
     except Exception as e:
+        logger.error(f"[LLM-ERROR] Streaming failed after {time.time()-start_time:.3f}s: {e}")
         yield json.dumps({"answer": f"\n[Hata: {str(e)}]"}) + "\n"
 
 async def route_and_answer(query: str, external_context: str = None) -> Dict[str, Any]:

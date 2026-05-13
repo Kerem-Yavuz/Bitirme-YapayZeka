@@ -85,13 +85,9 @@ logger = logging.getLogger(__name__)
 
 
 def get_index() -> VectorIndex:
-    """Get or create the vector index (connects to Qdrant)."""
-    global index_instance
-    if index_instance is None:
-        index_instance = VectorIndex()
-        index_instance.ensure_ready()
-        logger.info("VectorIndex initialized, connected to Qdrant")
-    return index_instance
+    """Get the global vector index singleton."""
+    from rag_qdrant import get_vector_index
+    return get_vector_index()
 
 
 # ========================= ENDPOINTS =========================
@@ -107,13 +103,10 @@ async def home():
 
 @app.post("/api/ask")
 async def api_ask(body: AskRequest):
-    """
-    Answer a question — routing is automatic.
-    If semantic router is available, it decides easy/hard/reject.
-    Otherwise falls back to direct RAG pipeline.
-
-    Real-time streaming: tokens are sent as they are generated.
-    """
+    """Ask a question to the AI using semantic routing or direct RAG."""
+    start_time = time.time()
+    logger.info(f"[API-ASK] New request: '{body.question[:50]}...' (top_k={body.top_k}, has_context={bool(body.external_context)})")
+    
     if ROUTER_AVAILABLE:
         from router import route_and_answer_stream
 
@@ -137,10 +130,12 @@ async def api_ask(body: AskRequest):
             )
 
         async def generate_fallback():
+            logger.info("[API-ASK] Fallback mode: calling direct RAG stream.")
             async for chunk in answer_query_stream(
-                body.question, index, top_k=body.top_k
+                body.question, index, top_k=body.top_k, external_context=body.external_context
             ):
                 yield chunk
+            logger.info(f"[API-ASK] Request completed in {time.time()-start_time:.3f}s")
 
         return StreamingResponse(generate_fallback(), media_type="text/event-stream")
 
@@ -170,6 +165,31 @@ async def api_search(body: SearchRequest):
             }
             for r in results
         ],
+    }
+
+@app.get("/api/status")
+async def api_status():
+    """Return hardware and system status."""
+    from rag_qdrant import get_system_info, get_vector_index
+    
+    info = get_system_info()
+    
+    try:
+        index = get_vector_index()
+        qdrant_info = index.get_collection_info()
+    except Exception as e:
+        qdrant_info = {"error": str(e)}
+        
+    return {
+        "system": info,
+        "qdrant": qdrant_info,
+        "config": {
+            "model": config.EMBED_MODEL,
+            "device": config.EMBED_DEVICE,
+            "top_k": config.TOP_K,
+            "sim_threshold": config.SIM_THRESHOLD
+        },
+        "router_available": ROUTER_AVAILABLE
     }
 
 

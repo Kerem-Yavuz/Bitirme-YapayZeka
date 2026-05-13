@@ -25,6 +25,7 @@ import logging
 import re
 import sys
 import time
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Dict, Optional, Any, Tuple
@@ -74,6 +75,38 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+def get_system_info() -> Dict[str, Any]:
+    """Get CPU, RAM and GPU statistics."""
+    info = {
+        "cpu_count": os.cpu_count(),
+        "load_avg": os.getloadavg() if hasattr(os, 'getloadavg') else [0,0,0],
+        "torch_device": config.EMBED_DEVICE,
+        "cuda_available": torch.cuda.is_available()
+    }
+    
+    if info["cuda_available"]:
+        info["gpu_name"] = torch.cuda.get_device_name(0)
+        info["gpu_memory_allocated"] = f"{torch.cuda.memory_allocated(0) / 1024**2:.2f} MB"
+        info["gpu_memory_reserved"] = f"{torch.cuda.memory_reserved(0) / 1024**2:.2f} MB"
+    
+    try:
+        import psutil
+        vm = psutil.virtual_memory()
+        info["ram_total"] = f"{vm.total / 1024**3:.2f} GB"
+        info["ram_available"] = f"{vm.available / 1024**3:.2f} GB"
+        info["ram_percent"] = f"{vm.percent}%"
+    except ImportError:
+        pass
+        
+    return info
+
+def log_system_resources():
+    """Log current hardware resource usage."""
+    info = get_system_info()
+    gpu_status = f"GPU: {info.get('gpu_name', 'N/A')} (Allocated: {info.get('gpu_memory_allocated', '0')})" if info['cuda_available'] else "GPU: Not Used (CPU Only)"
+    ram_status = f"RAM: {info.get('ram_percent', 'N/A')} used" if 'ram_percent' in info else ""
+    logger.info(f"[SYS-RESOURCES] {gpu_status} | {ram_status} | Load: {info['load_avg'][0]}")
 
 # ========================= DATA MODELS =========================
 
@@ -498,18 +531,25 @@ class VectorIndex:
         # Check cache first
         cached = self.cache.get(query)
         if cached is not None:
+            logger.debug(f"[INDEX-DEBUG] Cache hit for query: '{query[:30]}...'")
             query_vector = cached.tolist()
         else:
+            embed_start = time.time()
             embedding = self.model.encode([query], normalize_embeddings=True)[0]
+            embed_duration = time.time() - embed_start
+            logger.debug(f"[INDEX-DEBUG] Embedding generated in {embed_duration:.3f}s for query: '{query[:30]}...'")
             query_vector = embedding.tolist()
             self.cache.set(query, embedding)
 
+        search_start = time.time()
         search_results = self.client.query_points(
             collection_name=self.collection_name,
             query=query_vector,
             limit=top_k,
             with_payload=True,
         )
+        search_duration = time.time() - search_start
+        logger.debug(f"[INDEX-DEBUG] Qdrant search took {search_duration:.3f}s")
 
         results = []
         points = search_results.points if hasattr(search_results, 'points') else search_results
@@ -544,6 +584,21 @@ class VectorIndex:
             }
         except Exception:
             return {"points_count": 0, "vectors_count": 0, "status": "not_found"}
+
+
+_global_index_instance: Optional[VectorIndex] = None
+
+def get_vector_index() -> VectorIndex:
+    """Get or create a global VectorIndex singleton."""
+    global _global_index_instance
+    if _global_index_instance is None:
+        logger.info("Initializing global VectorIndex singleton...")
+        log_system_resources()
+        _global_index_instance = VectorIndex()
+        _global_index_instance.ensure_ready()
+        logger.info("VectorIndex singleton ready.")
+        log_system_resources()
+    return _global_index_instance
 
 
 # ========================= ASYNC LLM CLIENT =========================
@@ -674,15 +729,15 @@ class AsyncLlamaCppClient:
 
 # Course selection domain system prompt
 SYSTEM_PROMPT_RAG = (
-    "Sen bir üniversite ders seçim asistanısın. Verilen BAĞLAM'ı kullanarak "
-    "öğrencinin sorusunu yanıtla. Kaynaklarını [doc_id] formatında belirt. "
-    "BAĞLAM yetersizse bunu söyle ve genel bilgini ekle. "
+    "Sen bir üniversite ders seçim asistanısın. Verilen BAĞLAM ve EK BİLGİLER'i "
+    "kullanarak öğrencinin sorusunu yanıtla. Kaynaklarını [doc_id] formatında belirt. "
+    "BAĞLAM yetersizse bunu söyle ve EK BİLGİLER (Öğrenci Profili) ile genel bilgini kullan. "
     "Sadece ders seçimi, müfredat, kredi, kontenjan ve akademik konularda yardımcı ol."
 )
 
 SYSTEM_PROMPT_FALLBACK = (
-    "Sen bir üniversite ders seçim asistanısın. BAĞLAM boş veya yetersiz; "
-    "genel bilgini kullanarak Türkçe cevapla. "
+    "Sen bir üniversite ders seçim asistanısın. BAĞLAM bulunamadı; "
+    "varsa EK BİLGİLER'i (Öğrenci Profili) ve genel bilgini kullanarak Türkçe cevapla. "
     "Sadece ders seçimi ve akademik konularda yardımcı ol."
 )
 
@@ -701,6 +756,7 @@ def build_context(results: List[SearchResult],
         snippet = f"[{chunk.doc_id}] (benzerlik: {result.similarity:.3f})\n{chunk.text}\n"
 
         if total_chars + len(snippet) > max_chars:
+            logger.debug(f"[RAG-DEBUG] Context limit reached. Truncating at {total_chars} chars.")
             remaining = max_chars - total_chars
             if remaining > 100:
                 context_parts.append(snippet[:remaining] + "...")
@@ -718,8 +774,10 @@ async def answer_query_async(
     top_k: int = config.TOP_K,
     verbose: bool = True,
     llm_url: str = None,
+    **kwargs
 ) -> Dict[str, Any]:
     """Answer query using RAG pipeline (async)."""
+    external_context = kwargs.get('external_context')
 
     # Search for relevant chunks
     search_start = time.time()
@@ -734,10 +792,15 @@ async def answer_query_async(
     if use_rag:
         context = build_context(results)
         system_prompt = SYSTEM_PROMPT_RAG
-        user_prompt = f"Soru: {query}\n\nBAĞLAM:\n{context}\n\nCevap:"
+        user_prompt = f"Soru: {query}\n\nBAĞLAM:\n{context}"
     else:
         system_prompt = SYSTEM_PROMPT_FALLBACK
-        user_prompt = f"Soru: {query}\n\nBAĞLAM:\n(boş)\n\nCevap:"
+        user_prompt = f"Soru: {query}\n\nBAĞLAM:\n(boş)"
+
+    if external_context:
+        user_prompt += f"\n\nEK BİLGİLER (Öğrenci Profili/Kontenjan):\n{external_context}"
+
+    user_prompt += "\n\nCevap:"
 
     # Get answer from LLM
     base_url = llm_url or config.LLAMA_CPP_URL
@@ -794,8 +857,10 @@ async def answer_query_stream(
     index: VectorIndex,
     top_k: int = config.TOP_K,
     llm_url: str = None,
+    **kwargs
 ):
     """Answer query using RAG pipeline (streaming)."""
+    external_context = kwargs.get('external_context')
     search_start = time.time()
     results = index.search(query, top_k=top_k)
     search_time = time.time() - search_start
@@ -805,10 +870,16 @@ async def answer_query_stream(
     if use_rag:
         context = build_context(results)
         system_prompt = SYSTEM_PROMPT_RAG
-        user_prompt = f"Soru: {query}\n\nBAĞLAM:\n{context}\n\nCevap:"
+        user_prompt = f"Soru: {query}\n\nBAĞLAM:\n{context}"
     else:
         system_prompt = SYSTEM_PROMPT_FALLBACK
-        user_prompt = f"Soru: {query}\n\nBAĞLAM:\n(boş)\n\nCevap:"
+        user_prompt = f"Soru: {query}\n\nBAĞLAM:\n(boş)"
+
+    if external_context:
+        user_prompt += f"\n\nEK BİLGİLER (Öğrenci Profili/Kontenjan):\n{external_context}"
+        logger.debug(f"[RAG-DEBUG] Adding external context of {len(external_context)} chars")
+
+    user_prompt += "\n\nCevap:"
 
     base_url = llm_url or config.LLAMA_CPP_URL
 
