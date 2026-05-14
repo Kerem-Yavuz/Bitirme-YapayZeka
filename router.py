@@ -18,6 +18,27 @@ import aiohttp
 import cachetools
 from config import config
 
+# Language detection (multilingual support)
+try:
+    from langdetect import detect as _langdetect
+    LANGDETECT_AVAILABLE = True
+except ImportError:
+    LANGDETECT_AVAILABLE = False
+
+
+def detect_language(text: str) -> str:
+    """Detect the language of the input text.
+
+    Returns an ISO 639-1 code (e.g. 'tr', 'en', 'fr', 'de', 'ar').
+    Falls back to 'unknown' if langdetect is unavailable or the text is too short.
+    """
+    if not LANGDETECT_AVAILABLE or len(text.strip()) < 5:
+        return "unknown"
+    try:
+        return _langdetect(text)
+    except Exception:
+        return "unknown"
+
 # ========================= L1 TTL CONTEXT CACHE (Fix P4) =========================
 # Caches (route, context) for repeated identical queries — skips embed+search.
 # TTL=300s: stale after 5 min, safe for a university chatbot workload.
@@ -315,15 +336,21 @@ async def get_rag_context_async(query: str, top_k: int = 5) -> str:
 # ========================= MAIN ROUTING LOGIC =========================
 
 def build_prompts(query: str, context: str, external_context: str = None):
+    """Build system + user prompt pair.
+
+    Detects the user's language and injects it as an explicit tag so the LLM
+    always responds in the correct language regardless of context language.
+    """
+    lang = detect_language(query)
     system = (
         "You are a university course selection assistant. Using the provided CONTEXT and ADDITIONAL INFO, "
         "answer the student's question. Cite your sources. "
         "If the CONTEXT is insufficient, state this and use the ADDITIONAL INFO (Student Profile) and your general knowledge. "
         "Only assist with course selection and academic topics. "
-        "You MUST answer in the same language as the user's question. You ONLY support English and Turkish. "
-        "If the user asks in any language other than English or Turkish, politely reject the question and state that you only support English and Turkish."
+        "You MUST always answer in the exact same language the user wrote in. "
+        "The user's language is indicated at the top of their message as [User language: <code>]. Respect it strictly."
     )
-    user = f"Question: {query}\n\nCONTEXT:\n{context}"
+    user = f"[User language: {lang}]\nQuestion: {query}\n\nCONTEXT:\n{context}"
     if external_context:
         user += f"\n\nADDITIONAL INFO (Student Profile/Capacity):\n{external_context}"
     user += "\n\nAnswer:"

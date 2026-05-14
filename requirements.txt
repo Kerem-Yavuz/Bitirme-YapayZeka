@@ -33,3 +33,6 @@ lz4>=4.3
 
 # L1 TTL cache for hot queries
 cachetools>=5.3
+
+# Multilingual support — language detection
+langdetect>=1.0.9
