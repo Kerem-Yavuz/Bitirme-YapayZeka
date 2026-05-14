@@ -22,7 +22,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, Request, Header, HTTPException
+from fastapi import FastAPI, Request, Header, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -242,17 +242,25 @@ async def api_status():
 
 
 @app.post("/api/ingest")
-async def api_ingest(body: IngestRequest):
-    """Ingest documents from a folder into Qdrant."""
-    folder_path = Path(body.folder)
-    if not folder_path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"Folder not found: {body.folder}"
-        )
-
+async def api_ingest(
+    files: list[UploadFile] = File(...),
+    force: bool = Form(False)
+):
+    """Ingest documents from uploaded files into Qdrant."""
+    import tempfile
+    import shutil
+    
     start_time = time.time()
-    index = ingest_documents(folder_path, force_rebuild=body.force, show_progress=False)
+    
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_dir_path = Path(temp_dir)
+        for file in files:
+            file_path = temp_dir_path / file.filename
+            with open(file_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+                
+        index = ingest_documents(temp_dir_path, force_rebuild=force, show_progress=False)
+        
     elapsed = time.time() - start_time
 
     global index_instance

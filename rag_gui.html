@@ -609,8 +609,8 @@
                 <h2>Ingest Documents</h2>
                 <form id="ingest-form" onsubmit="handleIngest(event)">
                     <div class="form-group">
-                        <label for="folder-path">Folder Path</label>
-                        <input type="text" id="folder-path" placeholder="./data" required>
+                        <label for="upload-files">Upload Documents</label>
+                        <input type="file" id="upload-files" multiple required>
                     </div>
                     <div class="form-group">
                         <label>
@@ -696,10 +696,14 @@
 
         // API calls
         async function callAPI(endpoint, data = null) {
+            const isFormData = data instanceof FormData;
+            const headers = data && !isFormData ? { 'Content-Type': 'application/json' } : {};
+            const body = isFormData ? data : (data ? JSON.stringify(data) : null);
+
             const response = await fetch(`/api/${endpoint}`, {
                 method: data ? 'POST' : 'GET',
-                headers: data ? { 'Content-Type': 'application/json' } : {},
-                body: data ? JSON.stringify(data) : null
+                headers: headers,
+                body: body
             });
 
             if (!response.ok) {
@@ -838,14 +842,25 @@
         async function handleIngest(event) {
             event.preventDefault();
 
-            const folderPath = document.getElementById('folder-path').value;
+            const fileInput = document.getElementById('upload-files');
             const forceRebuild = document.getElementById('force-rebuild').checked;
+
+            if (fileInput.files.length === 0) {
+                alert("Please select files to upload.");
+                return;
+            }
+
+            const formData = new FormData();
+            for (let i = 0; i < fileInput.files.length; i++) {
+                formData.append('files', fileInput.files[i]);
+            }
+            formData.append('force', forceRebuild);
 
             document.getElementById('ingest-loading').classList.add('active');
             document.getElementById('ingest-results').innerHTML = '';
 
             try {
-                const result = await callAPI('ingest', { folder: folderPath, force: forceRebuild });
+                const result = await callAPI('ingest', formData);
                 document.getElementById('ingest-results').innerHTML = `
                     <div class="status-message status-success">
                         Successfully indexed ${result.total_chunks} chunks from ${result.total_files} files in ${result.elapsed_time.toFixed(2)}s
