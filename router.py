@@ -58,6 +58,8 @@ easy_route = Route(
         "When is the final exam?", "When is the midterm exam?", "What textbook does this course use?",
         "How is the grade calculated?", "Is there a lab session for this course?", "What are the office hours?",
         "How do I enroll in this course?", "What is the course capacity?",
+        "hoca kim", "vize ne zaman", "kredi kaç", "CS101 syllabus", "ders saatleri", "kontenjan",
+        "devam zorunluluğu", "BBM401 önkoşul",
     ],
 )
 
@@ -87,6 +89,8 @@ hard_route = Route(
         "What courses can I take during my Erasmus exchange?", "How will dropping this course affect my graduation?",
         "What electives complement my major the best?", "Should I take summer school or overload next semester?",
         "Analyze the difficulty level of this course combination", "How can I improve my GPA with course selection?",
+        "Eğer bu dersi geçemezsem seneye hangi dersleri alamam?", "Dönem uzatmamak için hangi dersi bırakmalıyım?",
+        "Bu iki seçmeli ders arasında kalsam hangisi GPA için daha iyi?", "If I fail this course, what courses can't I take next year?",
     ],
 )
 
@@ -234,15 +238,17 @@ def get_rag_context(query: str, top_k: int = 5) -> str:
 
 def build_prompts(query: str, context: str, external_context: str = None):
     system = (
-        "Sen bir üniversite ders seçim asistanısın. Verilen BAĞLAM ve EK BİLGİLER'i "
-        "kullanarak öğrencinin sorusunu yanıtla. Kaynaklarını belirt. Tüm cevaplarını %100 Türkçe ver. "
-        "BAĞLAM yetersizse bunu söyle ve EK BİLGİLER (Öğrenci Profili) ile genel bilgini kullan. "
-        "Sadece ders seçimi ve akademik konularda yardımcı ol."
+        "You are a university course selection assistant. Using the provided CONTEXT and ADDITIONAL INFO, "
+        "answer the student's question. Cite your sources. "
+        "If the CONTEXT is insufficient, state this and use the ADDITIONAL INFO (Student Profile) and your general knowledge. "
+        "Only assist with course selection and academic topics. "
+        "You MUST answer in the same language as the user's question. You ONLY support English and Turkish. "
+        "If the user asks in any language other than English or Turkish, politely reject the question and state that you only support English and Turkish."
     )
-    user = f"Soru: {query}\n\nBAĞLAM:\n{context}"
+    user = f"Question: {query}\n\nCONTEXT:\n{context}"
     if external_context:
-        user += f"\n\nEK BİLGİLER (Öğrenci Profili/Kontenjan):\n{external_context}"
-    user += "\n\nCevap:"
+        user += f"\n\nADDITIONAL INFO (Student Profile/Capacity):\n{external_context}"
+    user += "\n\nAnswer:"
     return system, user
 
 async def route_and_answer_stream(query: str, external_context: str = None):

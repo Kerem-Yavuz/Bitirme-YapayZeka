@@ -729,16 +729,20 @@ class AsyncLlamaCppClient:
 
 # Course selection domain system prompt
 SYSTEM_PROMPT_RAG = (
-    "Sen bir üniversite ders seçim asistanısın. Verilen BAĞLAM ve EK BİLGİLER'i "
-    "kullanarak öğrencinin sorusunu yanıtla. Kaynaklarını [doc_id] formatında belirt. "
-    "BAĞLAM yetersizse bunu söyle ve EK BİLGİLER (Öğrenci Profili) ile genel bilgini kullan. "
-    "Sadece ders seçimi, müfredat, kredi, kontenjan ve akademik konularda yardımcı ol."
+    "You are a university course selection assistant. Using the provided CONTEXT and ADDITIONAL INFO, "
+    "answer the student's question. Cite your sources using the [doc_id] format. "
+    "If the CONTEXT is insufficient, state this and use the ADDITIONAL INFO (Student Profile) and your general knowledge. "
+    "Only assist with course selection, curriculum, credits, capacity, and academic topics. "
+    "You MUST answer in the same language as the user's question. You ONLY support English and Turkish. "
+    "If the user asks in any language other than English or Turkish, politely reject the question and state that you only support English and Turkish."
 )
 
 SYSTEM_PROMPT_FALLBACK = (
-    "Sen bir üniversite ders seçim asistanısın. BAĞLAM bulunamadı; "
-    "varsa EK BİLGİLER'i (Öğrenci Profili) ve genel bilgini kullanarak Türkçe cevapla. "
-    "Sadece ders seçimi ve akademik konularda yardımcı ol."
+    "You are a university course selection assistant. No CONTEXT was found; "
+    "use the ADDITIONAL INFO (Student Profile) if available, and your general knowledge to answer the student. "
+    "Only assist with course selection and academic topics. "
+    "You MUST answer in the same language as the user's question. You ONLY support English and Turkish. "
+    "If the user asks in any language other than English or Turkish, politely reject the question and state that you only support English and Turkish."
 )
 
 
@@ -792,15 +796,15 @@ async def answer_query_async(
     if use_rag:
         context = build_context(results)
         system_prompt = SYSTEM_PROMPT_RAG
-        user_prompt = f"Soru: {query}\n\nBAĞLAM:\n{context}"
+        user_prompt = f"Question: {query}\n\nCONTEXT:\n{context}"
     else:
         system_prompt = SYSTEM_PROMPT_FALLBACK
-        user_prompt = f"Soru: {query}\n\nBAĞLAM:\n(boş)"
+        user_prompt = f"Question: {query}\n\nCONTEXT:\n(empty)"
 
     if external_context:
-        user_prompt += f"\n\nEK BİLGİLER (Öğrenci Profili/Kontenjan):\n{external_context}"
+        user_prompt += f"\n\nADDITIONAL INFO (Student Profile/Capacity):\n{external_context}"
 
-    user_prompt += "\n\nCevap:"
+    user_prompt += "\n\nAnswer:"
 
     # Get answer from LLM
     base_url = llm_url or config.LLAMA_CPP_URL
@@ -870,16 +874,16 @@ async def answer_query_stream(
     if use_rag:
         context = build_context(results)
         system_prompt = SYSTEM_PROMPT_RAG
-        user_prompt = f"Soru: {query}\n\nBAĞLAM:\n{context}"
+        user_prompt = f"Question: {query}\n\nCONTEXT:\n{context}"
     else:
         system_prompt = SYSTEM_PROMPT_FALLBACK
-        user_prompt = f"Soru: {query}\n\nBAĞLAM:\n(boş)"
+        user_prompt = f"Question: {query}\n\nCONTEXT:\n(empty)"
 
     if external_context:
-        user_prompt += f"\n\nEK BİLGİLER (Öğrenci Profili/Kontenjan):\n{external_context}"
+        user_prompt += f"\n\nADDITIONAL INFO (Student Profile/Capacity):\n{external_context}"
         logger.debug(f"[RAG-DEBUG] Adding external context of {len(external_context)} chars")
 
-    user_prompt += "\n\nCevap:"
+    user_prompt += "\n\nAnswer:"
 
     base_url = llm_url or config.LLAMA_CPP_URL
 
