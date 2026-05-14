@@ -30,12 +30,12 @@ logger = logging.getLogger(__name__)
 DEFAULTS = {
     # Qdrant
     "QDRANT_URL": "http://172.18.2.251:30986",
-    "QDRANT_COLLECTION": "ders_docs_v2",
+    "QDRANT_COLLECTION": "ders_docs_v3",
     "QDRANT_CONFIG_COLLECTION": "_system_config",
     "QDRANT_CACHE_COLLECTION": "_embedding_cache",
 
     # Embedding
-    "EMBED_MODEL": "sentence-transformers/all-MiniLM-L6-v2",
+    "EMBED_MODEL": "intfloat/multilingual-e5-small",
     "EMBED_BATCH_SIZE": "128",
     "EMBED_DEVICE": "cuda" if torch.cuda.is_available() else "cpu",
 

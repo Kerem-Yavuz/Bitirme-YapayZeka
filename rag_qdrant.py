@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import concurrent.futures
 import hashlib
 import json
 import logging
@@ -42,6 +43,18 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
 from config import config, save_config_to_qdrant
+
+
+def _apply_e5_prefix(text: str, mode: str) -> str:
+    """Add intfloat/e5 instruction prefix when the configured model requires it.
+
+    mode='query'   → prepend 'query: '   (for user questions & router utterances)
+    mode='passage' → prepend 'passage: ' (for indexed document chunks)
+    """
+    if "e5" in config.EMBED_MODEL.lower():
+        return f"{mode}: {text}"
+    return text
+
 
 # Optional NLTK
 try:
@@ -424,6 +437,11 @@ class VectorIndex:
         self.collection_name = config.QDRANT_COLLECTION
         self.cache = QdrantEmbeddingCache(self.client, self.dimension)
         self.chunks: List[DocChunk] = []
+        # Thread pool for offloading CPU-bound encode() and blocking Qdrant I/O
+        # out of the asyncio event loop (Fix W1)
+        self._executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="embed"
+        )
 
     def _ensure_collection(self):
         """Create document collection if it doesn't exist."""
@@ -468,17 +486,19 @@ class VectorIndex:
         self.chunks = chunks
 
         texts = [c.text for c in chunks]
+        # Apply passage prefix for e5-family models before encoding
+        texts_to_embed = [_apply_e5_prefix(t, "passage") for t in texts]
         embeddings = self.model.encode(
-            texts,
+            texts_to_embed,
             batch_size=config.EMBED_BATCH_SIZE,
             show_progress_bar=show_progress,
             convert_to_numpy=True,
             normalize_embeddings=True,
         )
 
-        # Store embeddings in cache
+        # Store embeddings in cache (keyed by prefixed text)
         try:
-            self.cache.set_batch(texts, embeddings)
+            self.cache.set_batch(texts_to_embed, embeddings)
         except Exception as e:
             logger.warning(f"Cache write failed (non-fatal): {e}")
 
@@ -526,31 +546,8 @@ class VectorIndex:
         except Exception as e:
             logger.warning(f"Config save failed (non-fatal): {e}")
 
-    def search(self, query: str, top_k: int = config.TOP_K) -> List[SearchResult]:
-        """Vector search in Qdrant."""
-        # Check cache first
-        cached = self.cache.get(query)
-        if cached is not None:
-            logger.debug(f"[INDEX-DEBUG] Cache hit for query: '{query[:30]}...'")
-            query_vector = cached.tolist()
-        else:
-            embed_start = time.time()
-            embedding = self.model.encode([query], normalize_embeddings=True)[0]
-            embed_duration = time.time() - embed_start
-            logger.debug(f"[INDEX-DEBUG] Embedding generated in {embed_duration:.3f}s for query: '{query[:30]}...'")
-            query_vector = embedding.tolist()
-            self.cache.set(query, embedding)
-
-        search_start = time.time()
-        search_results = self.client.query_points(
-            collection_name=self.collection_name,
-            query=query_vector,
-            limit=top_k,
-            with_payload=True,
-        )
-        search_duration = time.time() - search_start
-        logger.debug(f"[INDEX-DEBUG] Qdrant search took {search_duration:.3f}s")
-
+    def _parse_search_results(self, search_results, top_k: int) -> List[SearchResult]:
+        """Shared result parsing logic for sync and async search."""
         results = []
         points = search_results.points if hasattr(search_results, 'points') else search_results
         for rank, res in enumerate(points):
@@ -563,11 +560,74 @@ class VectorIndex:
                     chunk_index=res.payload.get("chunk_index", 0),
                     total_chunks=res.payload.get("total_chunks", 0),
                 )
-                results.append(SearchResult(
-                    chunk=chunk, similarity=res.score, rank=rank + 1
-                ))
-
+                results.append(SearchResult(chunk=chunk, similarity=res.score, rank=rank + 1))
         return results
+
+    def search(self, query: str, top_k: int = config.TOP_K) -> List[SearchResult]:
+        """Synchronous vector search — for CLI use only.
+
+        WARNING: Blocks the event loop. Use search_async() inside async contexts.
+        """
+        prefixed_query = _apply_e5_prefix(query, "query")
+        cached = self.cache.get(prefixed_query)
+        if cached is not None:
+            query_vector = cached.tolist()
+        else:
+            embed_start = time.time()
+            embedding = self.model.encode([prefixed_query], normalize_embeddings=True)[0]
+            logger.debug(f"[INDEX-DEBUG] Embedding in {time.time()-embed_start:.3f}s")
+            query_vector = embedding.tolist()
+            self.cache.set(prefixed_query, embedding)
+
+        search_results = self.client.query_points(
+            collection_name=self.collection_name,
+            query=query_vector,
+            limit=top_k,
+            with_payload=True,
+        )
+        return self._parse_search_results(search_results, top_k)
+
+    async def search_async(self, query: str, top_k: int = config.TOP_K) -> List[SearchResult]:
+        """Non-blocking vector search for use inside async request handlers (Fix W1).
+
+        CPU-bound model.encode() and blocking Qdrant I/O are both executed
+        inside a dedicated ThreadPoolExecutor so the asyncio event loop is
+        never blocked, allowing concurrent requests to be served.
+        """
+        loop = asyncio.get_event_loop()
+        prefixed_query = _apply_e5_prefix(query, "query")
+
+        # Cache lookup — blocking Qdrant retrieve, run in executor
+        cached = await loop.run_in_executor(
+            self._executor, self.cache.get, prefixed_query
+        )
+
+        if cached is not None:
+            logger.debug(f"[INDEX-DEBUG] Cache hit for query: '{query[:30]}...'")
+            query_vector = cached.tolist()
+        else:
+            # model.encode is CPU/GPU-bound — must not block the event loop
+            embed_start = time.time()
+            embedding = await loop.run_in_executor(
+                self._executor,
+                lambda: self.model.encode([prefixed_query], normalize_embeddings=True)[0],
+            )
+            logger.debug(f"[INDEX-DEBUG] Async embed in {time.time()-embed_start:.3f}s")
+            query_vector = embedding.tolist()
+            # Fire-and-forget cache write (non-critical path)
+            loop.run_in_executor(self._executor, self.cache.set, prefixed_query, embedding)
+
+        # Qdrant network I/O — also blocking, run in executor
+        search_results = await loop.run_in_executor(
+            self._executor,
+            lambda: self.client.query_points(
+                collection_name=self.collection_name,
+                query=query_vector,
+                limit=top_k,
+                with_payload=True,
+            ),
+        )
+        return self._parse_search_results(search_results, top_k)
 
     def ensure_ready(self):
         """Ensure Qdrant collection exists and is accessible."""
@@ -783,9 +843,9 @@ async def answer_query_async(
     """Answer query using RAG pipeline (async)."""
     external_context = kwargs.get('external_context')
 
-    # Search for relevant chunks
+    # Search for relevant chunks (non-blocking async path)
     search_start = time.time()
-    results = index.search(query, top_k=top_k)
+    results = await index.search_async(query, top_k=top_k)
     search_time = time.time() - search_start
 
     if verbose:
@@ -866,7 +926,7 @@ async def answer_query_stream(
     """Answer query using RAG pipeline (streaming)."""
     external_context = kwargs.get('external_context')
     search_start = time.time()
-    results = index.search(query, top_k=top_k)
+    results = await index.search_async(query, top_k=top_k)
     search_time = time.time() - search_start
 
     use_rag = len(results) > 0 and results[0].similarity >= config.SIM_THRESHOLD

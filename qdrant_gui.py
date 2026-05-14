@@ -18,6 +18,7 @@ import secrets
 import os
 import random
 import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -66,11 +67,51 @@ except Exception as e:
 # ── Admin key ─────────────────────────────────────────────────────────
 RESET_API_KEY = os.getenv("RESET_API_KEY", "")
 
+# ========================= LIFESPAN =========================
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage startup and graceful shutdown of all singletons."""
+    # --- STARTUP ---
+    # Stagger workers to avoid simultaneous memory spikes (OOM guard)
+    wait_time = random.uniform(0, 10)
+    logger.info(f"🚀 API starting up... (stagger delay: {wait_time:.2f}s)")
+    await asyncio.sleep(wait_time)
+
+    try:
+        from rag_qdrant import get_vector_index
+        get_vector_index()                       # Load embedding model + connect Qdrant
+
+        if ROUTER_AVAILABLE:
+            from router import get_router, init_http_sessions
+            get_router()                         # Build semantic router index
+            await init_http_sessions()           # Create persistent LLM HTTP sessions (Fix W2)
+
+        logger.info("✅ Worker ready.")
+    except Exception as e:
+        logger.error(f"❌ Startup error: {e}")
+
+    yield  # <-- app is running here
+
+    # --- SHUTDOWN ---
+    if ROUTER_AVAILABLE:
+        try:
+            from router import close_http_sessions
+            await close_http_sessions()
+        except Exception as e:
+            logger.warning(f"Session close error: {e}")
+
+    import torch
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    logger.info("Worker shut down cleanly.")
+
+
 # ── App ───────────────────────────────────────────────────────────────
 app = FastAPI(
     title="Ders Seçim Chatbot API",
     description="RAG-based course selection assistant. All data in Qdrant.",
-    version="2.0.0",
+    version="2.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -91,29 +132,6 @@ def get_index() -> VectorIndex:
     from rag_qdrant import get_vector_index
     return get_vector_index()
 
-
-# ========================= STARTUP =========================
-@app.on_event("startup")
-async def startup_event():
-    """Initialize singletons on startup with staggering to avoid OOM."""
-    # Stagger startup to avoid simultaneous memory spikes
-    wait_time = random.uniform(0, 10)
-    logger.info(f"🚀 API Sunucusu hazırlanıyor... (Gecikme: {wait_time:.2f}s)")
-    await asyncio.sleep(wait_time)
-    
-    try:
-        # 1. Load RAG Index (loads the main model)
-        from rag_qdrant import get_vector_index
-        get_vector_index()
-        
-        # 2. Load Router
-        if ROUTER_AVAILABLE:
-            from router import get_router
-            get_router()
-            
-        logger.info("✅ İşçi (Worker) başarıyla hazırlandı ve hazır.")
-    except Exception as e:
-        logger.error(f"❌ Başlatma hatası: {e}")
 
 
 # ========================= ENDPOINTS =========================

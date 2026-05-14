@@ -17,8 +17,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # This layer is cached as long as requirements.txt stays the same
 RUN --mount=type=cache,target=/root/.cache/pip \
     python3 -c "import nltk; nltk.download('punkt', quiet=True); nltk.download('punkt_tab', quiet=True); \
-    from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2'); \
-    from semantic_router.encoders import HuggingFaceEncoder; HuggingFaceEncoder(name='sentence-transformers/all-MiniLM-L6-v2')"
+    from sentence_transformers import SentenceTransformer; SentenceTransformer('intfloat/multilingual-e5-small'); \
+    from semantic_router.encoders import HuggingFaceEncoder; HuggingFaceEncoder(name='intfloat/multilingual-e5-small')"
 
 # Copy application code
 COPY . .
