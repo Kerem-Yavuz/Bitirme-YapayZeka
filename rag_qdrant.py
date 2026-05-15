@@ -305,6 +305,14 @@ class SmartChunker:
         for sentence in sentences:
             sentence_size = len(sentence)
 
+            if sentence_size > self.chunk_size:
+                # BUG-11 FIX: Hard split the oversized sentence by characters
+                for sub in self._chunk_by_chars(sentence):
+                    chunks.append(sub)
+                current_chunk = []
+                current_size = 0
+                continue
+
             if current_size + sentence_size <= self.chunk_size:
                 current_chunk.append(sentence)
                 current_size += sentence_size
@@ -1158,6 +1166,12 @@ def cmd_info(args):
 
 
 def main():
+    # BUG-10 FIX: ensure stdout and stderr use utf-8 encoding to prevent garbled Turkish characters
+    if sys.stdout.encoding.lower() != 'utf-8':
+        sys.stdout.reconfigure(encoding='utf-8')
+    if sys.stderr.encoding.lower() != 'utf-8':
+        sys.stderr.reconfigure(encoding='utf-8')
+
     parser = argparse.ArgumentParser(
         prog='rag_qdrant.py',
         description='Ders Seçim Chatbot — RAG Engine'

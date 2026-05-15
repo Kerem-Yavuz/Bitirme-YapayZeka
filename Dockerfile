@@ -31,4 +31,4 @@ EXPOSE 5000
 
 # Start with uvicorn (ASGI)
 # Use 2 workers to balance concurrency and memory (avoiding OOM)
-CMD ["uvicorn", "qdrant_gui:app", "--host", "0.0.0.0", "--port", "5000", "--workers", "2", "--timeout-keep-alive", "300"]
+CMD ["uvicorn", "qdrant_gui:app", "--host", "0.0.0.0", "--port", "5000", "--workers", "1", "--timeout-keep-alive", "300"]

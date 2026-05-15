@@ -11,7 +11,7 @@ import hashlib
 from typing import Dict, Any, AsyncGenerator
 
 from semantic_router import Route, SemanticRouter
-from semantic_router.encoders import HuggingFaceEncoder
+from semantic_router.encoders import BaseEncoder
 from semantic_router.index.local import LocalIndex
 
 import aiohttp
@@ -177,15 +177,22 @@ def get_router() -> SemanticRouter:
         
         logger.info(f"Initializing SemanticRouter (Memory Optimized)...")
         
-        # Initialize standard encoder
-        encoder = HuggingFaceEncoder(name=config.EMBED_MODEL)
-        
-        # MONKEY-PATCH: Bypass Pydantic validation to force model sharing
-        try:
-            object.__setattr__(encoder, 'model', index_instance.model)
-            logger.info("✅ Router is using the shared model instance (Forced).")
-        except Exception as e:
-            logger.warning(f"Shared model injection failed: {e}")
+        # BUG-7 FIX: Custom encoder to securely use the shared model instance 
+        # without Pydantic triggering a duplicate load into RAM.
+        class SharedEncoder(BaseEncoder):
+            name: str
+            type: str = "huggingface"
+
+            def __init__(self, name: str, shared_model):
+                super().__init__(name=name)
+                object.__setattr__(self, "_shared_model", shared_model)
+
+            def __call__(self, docs: list[str]) -> list[list[float]]:
+                embeddings = self._shared_model.encode(docs, convert_to_numpy=True, normalize_embeddings=True)
+                return embeddings.tolist()
+
+        encoder = SharedEncoder(name=config.EMBED_MODEL, shared_model=index_instance.model)
+        logger.info("✅ Router is using the shared model instance safely.")
 
         index = LocalIndex()
         _router_instance = SemanticRouter(
@@ -236,7 +243,6 @@ async def call_llm_stream(route_name: str, system: str, user: str) -> AsyncGener
     else:
         owns_session = False
 
-    llm_url = config.EASY_LLM_URL if route_name == "easy" else config.HARD_LLM_URL
     payload = {
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
         "temperature": config.LLAMA_CPP_TEMPERATURE,
@@ -244,7 +250,8 @@ async def call_llm_stream(route_name: str, system: str, user: str) -> AsyncGener
         "stream": True,
     }
     try:
-        async with session.post(f"{llm_url}/v1/chat/completions", json=payload) as resp:
+        # BUG-6 FIX: session already has base_url configured, so we use relative path
+        async with session.post("/v1/chat/completions", json=payload) as resp:
             if resp.status != 200:
                 raise RuntimeError(f"LLM error: {resp.status}")
             buffer = ""
@@ -284,7 +291,6 @@ async def call_llm(route_name: str, system: str, user: str) -> str:
         session = aiohttp.ClientSession(base_url=url, timeout=timeout)
         owns_session = True
 
-    llm_url = config.EASY_LLM_URL if route_name == "easy" else config.HARD_LLM_URL
     payload = {
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
         "temperature": config.LLAMA_CPP_TEMPERATURE,
@@ -292,7 +298,8 @@ async def call_llm(route_name: str, system: str, user: str) -> str:
         "stream": False,
     }
     try:
-        async with session.post(f"{llm_url}/v1/chat/completions", json=payload) as resp:
+        # BUG-6 FIX: session already has base_url configured, so we use relative path
+        async with session.post("/v1/chat/completions", json=payload) as resp:
             if resp.status != 200:
                 raise RuntimeError(f"LLM error: {resp.status}")
             data = await resp.json()

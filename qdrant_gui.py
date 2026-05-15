@@ -270,8 +270,21 @@ async def api_ingest(
         
     elapsed = time.time() - start_time
 
+    # Shutdown the old GUI index instance
     global index_instance
+    if index_instance is not None:
+        index_instance.shutdown()
     index_instance = index
+
+    # Also update and safely shutdown the global instance in rag_qdrant
+    import rag_qdrant
+    if rag_qdrant._global_index_instance is not None:
+        rag_qdrant._global_index_instance.shutdown()
+    rag_qdrant._global_index_instance = index
+
+    import torch
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     return {
         "success": True,
@@ -378,7 +391,18 @@ async def reset_qdrant(request: Request, x_reset_key: Optional[str] = Header(Non
             pass
 
     global index_instance
+    if index_instance is not None:
+        index_instance.shutdown()
     index_instance = None
+
+    import rag_qdrant
+    if rag_qdrant._global_index_instance is not None:
+        rag_qdrant._global_index_instance.shutdown()
+    rag_qdrant._global_index_instance = None
+
+    import torch
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     return {
         "success": True,
