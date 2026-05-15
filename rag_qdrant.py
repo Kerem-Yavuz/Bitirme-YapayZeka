@@ -335,12 +335,21 @@ class SmartChunker:
         start = 0
         text_len = len(text)
 
+        # BUG-1 FIX: guard against infinite loop when overlap >= chunk_size
+        step = self.chunk_size - self.overlap
+        if step <= 0:
+            logger.warning(
+                f"CHUNK_OVERLAP ({self.overlap}) >= CHUNK_SIZE ({self.chunk_size}) — "
+                "forcing step=1 to prevent infinite loop."
+            )
+            step = 1
+
         while start < text_len:
             end = start + self.chunk_size
             chunk = text[start:end]
             if len(chunk) >= config.MIN_CHUNK_SIZE:
                 chunks.append(chunk)
-            start += self.chunk_size - self.overlap
+            start += step
 
         return chunks
 
@@ -442,6 +451,7 @@ class VectorIndex:
         self._executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=2, thread_name_prefix="embed"
         )
+        self._executor_closed = False
 
     def _ensure_collection(self):
         """Create document collection if it doesn't exist."""
@@ -474,7 +484,9 @@ class VectorIndex:
                 for point in results:
                     if point.payload:
                         checksums[point.payload.get("doc_id", "")] = point.payload.get("checksum", "")
-                if offset is None:
+                # BUG-3 FIX: Qdrant SDK may return offset=0 (not None) on an exact
+                # multiple-of-100 collection; checking only `is None` would loop forever.
+                if offset is None or offset == 0 or len(results) < 100:
                     break
         except Exception:
             pass  # Collection might not exist yet
@@ -503,10 +515,18 @@ class VectorIndex:
             logger.warning(f"Cache write failed (non-fatal): {e}")
 
         # Upload to Qdrant
+        # BUG-2 FIX: use an id_offset equal to the current point count so that
+        # incremental ingests append rather than overwriting existing points (id=0,1,2…).
+        try:
+            _coll_info = self.client.get_collection(self.collection_name)
+            id_offset = _coll_info.points_count or 0
+        except Exception:
+            id_offset = 0
+
         points = []
         for i, (chunk, vector) in enumerate(zip(chunks, embeddings)):
             points.append(models.PointStruct(
-                id=i,
+                id=id_offset + i,
                 vector=vector.tolist(),
                 payload={
                     "text": chunk.text,
@@ -594,7 +614,9 @@ class VectorIndex:
         inside a dedicated ThreadPoolExecutor so the asyncio event loop is
         never blocked, allowing concurrent requests to be served.
         """
-        loop = asyncio.get_event_loop()
+        # BUG-5 FIX: get_event_loop() is deprecated (3.10) and raises RuntimeError (3.12+)
+        # inside a running coroutine. get_running_loop() is always correct here.
+        loop = asyncio.get_running_loop()
         prefixed_query = _apply_e5_prefix(query, "query")
 
         # Cache lookup — blocking Qdrant retrieve, run in executor
@@ -632,6 +654,15 @@ class VectorIndex:
     def ensure_ready(self):
         """Ensure Qdrant collection exists and is accessible."""
         self._ensure_collection()
+
+    def shutdown(self):
+        """BUG-4 FIX: Release the ThreadPoolExecutor so worker threads are joined
+        cleanly on application shutdown. Without this, every VectorIndex
+        re-instantiation (hot-reload, tests) leaks 2 daemon threads permanently."""
+        if not self._executor_closed:
+            self._executor.shutdown(wait=False)
+            self._executor_closed = True
+            logger.info("VectorIndex ThreadPoolExecutor shut down.")
 
     def get_collection_info(self) -> Dict[str, Any]:
         """Get collection statistics from Qdrant."""

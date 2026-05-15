@@ -100,6 +100,13 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Session close error: {e}")
 
+    # BUG-4 FIX: shut down the ThreadPoolExecutor so embed worker threads are joined
+    try:
+        from rag_qdrant import get_vector_index
+        get_vector_index().shutdown()
+    except Exception as e:
+        logger.warning(f"VectorIndex shutdown error: {e}")
+
     import torch
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
