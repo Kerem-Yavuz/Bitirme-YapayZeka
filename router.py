@@ -11,7 +11,10 @@ import hashlib
 from typing import Dict, Any, AsyncGenerator
 
 from semantic_router import Route, SemanticRouter
-from semantic_router.encoders import BaseEncoder
+try:
+    from semantic_router.encoders import BaseEncoder
+except ImportError:
+    from semantic_router.encoders.base import BaseEncoder
 from semantic_router.index.local import LocalIndex
 
 import aiohttp
